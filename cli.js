@@ -816,54 +816,41 @@ const commands = {
     console.log(JSON.stringify({ type: "conversations-active", conversations: events }));
   },
 
-  async "drain-conv"(convId, ...flags) {
-    // Non-blocking: read any new messages for a specific conversation since cursor.
-    // With --wait-hot: if 3+ messages arrived in the last 60s, wait 2s for stragglers.
-    // Used by conversation agents before sending to check for new messages.
+  async "drain-conv"(convId) {
+    // Instant non-blocking: read any new messages for this conversation since cursor.
+    // No waiting, no sleeping. Returns immediately.
     if (!convId) {
-      console.error("Usage: dy drain-conv <convId> [--wait-hot]");
+      console.error("Usage: dy drain-conv <convId>");
       process.exit(1);
     }
-    const waitHot = flags.includes("--wait-hot");
     const fs = await import("node:fs");
     const LOG = "/tmp/dy-messages.jsonl";
     const CURSOR = `/tmp/dy-listen-${convId}.cursor`;
-    if (!fs.existsSync(LOG)) { console.log(JSON.stringify({ messages: [], count: 0, hot: false })); return; }
+    if (!fs.existsSync(LOG)) { console.log(JSON.stringify({ messages: [], count: 0 })); return; }
 
     const signature = loadSignature();
+    let cursor = 0;
+    try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+    const currentSize = fs.statSync(LOG).size;
 
-    function readNewMessages() {
-      let cursor = 0;
-      try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
-      const currentSize = fs.statSync(LOG).size;
-      if (currentSize <= cursor) return [];
-      const fd = fs.openSync(LOG, "r");
-      const buf = Buffer.alloc(currentSize - cursor);
-      fs.readSync(fd, buf, 0, buf.length, cursor);
-      fs.closeSync(fd);
-      fs.writeFileSync(CURSOR, String(currentSize));
-      return buf.toString().trim().split("\n").filter(Boolean).map(line => {
-        try { return JSON.parse(line); } catch { return null; }
-      }).filter(Boolean).filter(m => {
-        if (m.convId !== convId) return false;
-        if (m.text && m.text.endsWith(signature)) return false;
-        return true;
-      });
+    if (currentSize <= cursor) {
+      console.log(JSON.stringify({ messages: [], count: 0 }));
+      return;
     }
 
-    let messages = readNewMessages();
+    const fd = fs.openSync(LOG, "r");
+    const buf = Buffer.alloc(currentSize - cursor);
+    fs.readSync(fd, buf, 0, buf.length, cursor);
+    fs.closeSync(fd);
+    fs.writeFileSync(CURSOR, String(currentSize));
 
-    // Detect "hot" conversation: 3+ messages in last 60s
-    const now = Date.now();
-    const recentCount = messages.filter(m => m.createdAt && (now - m.createdAt) < 60000).length;
-    const isHot = recentCount >= 3;
-
-    // If hot and --wait-hot flag, wait 2s then drain again to catch stragglers
-    if (isHot && waitHot) {
-      await new Promise(r => setTimeout(r, 2000));
-      const extra = readNewMessages();
-      messages = [...messages, ...extra];
-    }
+    const messages = buf.toString().trim().split("\n").filter(Boolean).map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean).filter(m => {
+      if (m.convId !== convId) return false;
+      if (m.text && m.text.endsWith(signature)) return false;
+      return true;
+    });
 
     // Enrich stickers
     const enriched = messages.map(m => {
@@ -874,7 +861,7 @@ const commands = {
       return m;
     });
 
-    console.log(JSON.stringify({ messages: enriched, count: enriched.length, hot: isHot }));
+    console.log(JSON.stringify({ messages: enriched, count: enriched.length }));
   },
 
   async "sticker-cache"(action, ...args) {
@@ -1020,7 +1007,7 @@ Commands:
   shared-groups <uid>        Find group chats containing a user
   listen-conv <convId> [m]   Per-conversation listener (one conv only)
   listen-supervisor          Supervisor: emit active conversation signals
-  drain-conv <convId>        Non-blocking check for new messages in a conv
+  drain-conv <convId>        Instant check for new messages in a conv
   sticker-cache <action>     Manage sticker interpretation cache
   search <query>             Search messages
   conv <convId>              Get conversation detail with last message

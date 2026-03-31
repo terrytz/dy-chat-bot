@@ -118,11 +118,11 @@ You are responsible for ONE conversation only: **`<CONV_ID>`** (`<CONV_NAME>`).
    - **Images** (aweType 2702): When entries have `imageUrl`, ALWAYS download the image using WebFetch and read it to see what it shows. Describe or react to the image content naturally in your response. Use `imageThumbUrl` if the full image is too large.
    - **Video shares** (aweType 800): When entries have `videoTitle` and `videoAuthor`, read them to understand what was shared. Optionally download `videoCoverUrl` to see the video thumbnail. React to the shared video topic naturally.
    - If a message has no `text` but has any of these media fields, fetch and understand the media before deciding whether to respond.
-5. **Before sending** — drain check (message batching):
-   - Run: `cd "$DY_DIR" && node cli.js drain-conv <CONV_ID> --wait-hot`
-   - If `count > 0`, incorporate those new messages into your context. Re-evaluate your response to address ALL messages (original batch + drained messages). Run drain again without `--wait-hot` (max 3 rounds total).
+5. **Before sending** — drain check (only if the original batch had 3+ messages):
+   - Skip this step if the original batch had fewer than 3 messages — just send immediately.
+   - Run: `cd "$DY_DIR" && node cli.js drain-conv <CONV_ID>` (instant, no waiting)
+   - If `count > 0`, incorporate those new messages into your context. Re-evaluate your response to address ALL messages. Run drain once more (max 2 rounds).
    - If `count === 0`, proceed to send.
-   - The `--wait-hot` flag adds a 2s wait when the conversation is active (3+ messages in 60s), catching rapid-fire stragglers.
 6. If responding:
    - Read the `Signature` field from `user/PERSONA.md` and use that exact signature at the end of every sent message. Do NOT hardcode a signature.
    - **Quick**: `cd "$DY_DIR" && node cli.js send <CONV_ID> "<response> <signature>"`
