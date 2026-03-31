@@ -1,0 +1,1024 @@
+#!/usr/bin/env node
+
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { lookup as stickerLookup, store as stickerStore, list as stickerList, stats as stickerStats, clear as stickerClear } from "./sticker-cache.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const USER_DIR = join(__dirname, "user");
+const BASE = "http://127.0.0.1:3456";
+
+function loadConfig() {
+  try {
+    return JSON.parse(readFileSync(join(USER_DIR, "config.json"), "utf8"));
+  } catch {
+    return { allowedChats: {} };
+  }
+}
+
+function isAllowedChat(convId) {
+  const config = loadConfig();
+  const allowed = Object.keys(config.allowedChats || {});
+  return allowed.length === 0 || allowed.includes(convId);
+}
+
+function loadSignature() {
+  try {
+    const persona = readFileSync(join(USER_DIR, "PERSONA.md"), "utf8");
+    const sigMatch = persona.match(/Signature[*:\s]*`([^`]+)`/i);
+    if (sigMatch) return sigMatch[1];
+  } catch {}
+  return "[Bot]";
+}
+
+function loadTriggerName() {
+  try {
+    const persona = readFileSync(join(USER_DIR, "PERSONA.md"), "utf8");
+    const triggerMatch = persona.match(/Trigger[:\s]*.*?"(\w+)"/i) || persona.match(/Name[:\s]*\*?\*?(\w+)/i);
+    if (triggerMatch) return triggerMatch[1].toLowerCase();
+  } catch {}
+  return "bot";
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, options);
+  const data = await res.json();
+  if (!data.ok) {
+    console.error(`Error: ${data.error}`);
+    process.exit(1);
+  }
+  return data;
+}
+
+function formatTime(ts) {
+  if (!ts) return "";
+  const d = new Date(typeof ts === "number" && ts < 1e12 ? ts * 1000 : ts);
+  return d.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
+}
+
+function truncate(s, len = 60) {
+  if (!s) return "";
+  return s.length > len ? s.slice(0, len) + "…" : s;
+}
+
+async function buildNicknameMap() {
+  const map = {};
+  try {
+    const { data: user } = await api("/api/user");
+    if (user?.uid) map[user.uid] = user.nickname || "我";
+  } catch {}
+  try {
+    const { data: contacts } = await api("/api/contacts");
+    for (const c of contacts || []) {
+      if (c.uid) map[c.uid] = c.remarkName || c.nickname || c.uid;
+    }
+  } catch {}
+  return map;
+}
+
+function formatSticker(pc) {
+  const stickerUrl = pc.url?.url_list?.[0] || "";
+  const name = pc.display_name || pc.keyword || "";
+  const label = name ? `[表情: ${name}]` : "[表情包]";
+  return stickerUrl ? `${label} ${stickerUrl}` : label;
+}
+
+function formatMessageContent(m) {
+  const pc = m.parsedContent || {};
+  const aweType = pc.aweType;
+
+  // Text messages
+  if (pc.text) return pc.text;
+
+  // Sticker / emoji (type 5, aweType 501/507/510 etc.)
+  if (m.type === 5 || (aweType >= 500 && aweType < 600)) {
+    return formatSticker(pc);
+  }
+
+  // Image (type 27, aweType 2702)
+  if (aweType === 2702 || m.type === 27) {
+    const url = pc.resource_url;
+    const imgUrl = url?.origin_url_list?.[0] || url?.large_url_list?.[0] || url?.medium_url_list?.[0] || url?.thumb_url_list?.[0] || "";
+    const w = pc.cover_width || 0;
+    const h = pc.cover_height || 0;
+    const size = url?.data_size ? ` ${Math.round(Number(url.data_size) / 1024)}KB` : "";
+    return `[图片 ${w}x${h}${size}] ${imgUrl}`;
+  }
+
+  // Video/content share (type 8, aweType 800)
+  if (aweType === 800 || m.type === 8) {
+    const title = pc.content_title || "";
+    const author = pc.content_name || "";
+    const coverUrl = pc.cover_url?.url_list?.[0] || "";
+    const preview = title ? truncate(title, 40) : "";
+    return `[分享视频${author ? ` @${author}` : ""}] ${preview}${coverUrl ? ` ${coverUrl}` : ""}`.trim();
+  }
+
+  // Comment share (aweType 10500)
+  if (pc.comment) return `[分享评论] ${pc.comment}`;
+
+  return `[type:${m.type} aweType:${aweType || ""}]`;
+}
+
+const commands = {
+  async health() {
+    const data = await api("/health");
+    console.log(JSON.stringify(data, null, 2));
+  },
+
+  async user() {
+    const { data } = await api("/api/user");
+    console.log(`User: ${data.nickname} (uid: ${data.uid})`);
+  },
+
+  async conversations() {
+    const [{ data }, nickMap, { data: userInfo }] = await Promise.all([
+      api("/api/conversations"),
+      buildNicknameMap(),
+      api("/api/user"),
+    ]);
+    const selfUid = userInfo?.uid || "";
+    if (!data || data.length === 0) {
+      console.log("No conversations found.");
+      return;
+    }
+    console.log(`Found ${data.length} conversations:\n`);
+    for (const c of data) {
+      let name = c.coreInfo?.name || "";
+      const type = c.type === 1 ? "DM" : c.type === 2 ? "Group" : `Type:${c.type}`;
+      // For DMs, resolve name from conversation ID (format: 0:1:myUid:theirUid)
+      if (!name && c.type === 1) {
+        const parts = (c.id || "").split(":");
+        const uids = parts.filter(p => /^\d{5,}$/.test(p));
+        const otherUid = uids.find(u => u !== selfUid) || uids[uids.length - 1];
+        name = (otherUid && nickMap[otherUid]) || otherUid || "Unknown";
+      }
+      if (!name) name = "Unknown";
+      const unread = c.unreadCount || 0;
+      const lastMsg = c.lastMessage;
+      let preview = "";
+      if (lastMsg) {
+        try {
+          const content = typeof lastMsg.content === "string" ? JSON.parse(lastMsg.content) : lastMsg.content;
+          preview = content?.text || "";
+        } catch {
+          preview = "";
+        }
+      }
+      const unreadTag = unread > 0 ? ` [${unread} unread]` : "";
+      console.log(`  ${c.id}  ${type.padEnd(5)}  ${name}${unreadTag}`);
+      if (preview) console.log(`    └─ ${truncate(preview)}`);
+    }
+  },
+
+  async contacts() {
+    const { data } = await api("/api/contacts");
+    if (!data || data.length === 0) {
+      console.log("No contacts found.");
+      return;
+    }
+    console.log(`Found ${data.length} contacts:\n`);
+    for (const c of data) {
+      const name = c.nickname || c.remarkName || c.uid || "Unknown";
+      const remark = c.remarkName && c.remarkName !== name ? ` (${c.remarkName})` : "";
+      console.log(`  ${c.uid || "?"}  ${name}${remark}`);
+    }
+  },
+
+  async messages(convId, limit = "20") {
+    if (!convId) {
+      console.error("Usage: dy messages <convId> [limit]");
+      process.exit(1);
+    }
+    const [{ data }, nickMap] = await Promise.all([
+      api(`/api/messages?convId=${convId}&limit=${limit}`),
+      buildNicknameMap(),
+    ]);
+    const msgs = data?.messages || [];
+    if (msgs.length === 0) {
+      console.log("No messages found.");
+      return;
+    }
+    for (const m of msgs) {
+      const uid = m.sender || "?";
+      const name = nickMap[uid] || uid;
+      const selfTag = m.isSelfSend ? " (you)" : "";
+      const time = formatTime(m.createdAt);
+      const text = formatMessageContent(m);
+      console.log(`  [${time}] ${name}${selfTag}: ${text}`);
+    }
+    if (data.hasPre) console.log(`\n  ... older messages available`);
+  },
+
+  async send(convId, ...messageParts) {
+    const message = messageParts.join(" ").replace(/\\([!'"?#&()])/g, "$1");
+    if (!convId || !message) {
+      console.error("Usage: dy send <convId> <message>");
+      process.exit(1);
+    }
+    const { data } = await api("/api/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId, text: message }),
+    });
+    console.log("Sent:", JSON.stringify(data, null, 2));
+  },
+
+  async poll(since = "0") {
+    const { data, ts } = await api(`/api/new-messages?since=${since}`);
+    const signature = loadSignature();
+    // Always output pure JSON for machine consumption
+    const messages = (data || []).map((m) => {
+      const d = m.data;
+      const pc = d.parsedContent || {};
+      const isSticker = d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600);
+      const isImage = pc.aweType === 2702 || d.type === 27;
+      const isVideoShare = pc.aweType === 800 || d.type === 8;
+      const msg = {
+        convId: d.conversationId,
+        sender: d.sender,
+        isSelfSend: d.isSelfSend || false,
+        text: pc.text || "",
+        type: d.type,
+        aweType: pc.aweType,
+        createdAt: d.createdAt,
+        isBotMessage: (pc.text || "").endsWith(signature),
+      };
+      if (isSticker) {
+        msg.stickerUrl = pc.url?.url_list?.[0] || "";
+        msg.stickerKeyword = pc.display_name || pc.keyword || "";
+      }
+      if (isImage) {
+        const url = pc.resource_url || {};
+        msg.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || "";
+        msg.imageThumbUrl = url.thumb_url_list?.[0] || "";
+        msg.imageWidth = pc.cover_width || 0;
+        msg.imageHeight = pc.cover_height || 0;
+      }
+      if (isVideoShare) {
+        msg.videoTitle = pc.content_title || "";
+        msg.videoAuthor = pc.content_name || "";
+        msg.videoCoverUrl = pc.cover_url?.url_list?.[0] || "";
+        msg.videoItemId = pc.itemId || "";
+      }
+      return msg;
+    });
+    console.log(JSON.stringify({ messages, ts }, null, 2));
+  },
+
+  async watch() {
+    const fs = await import("node:fs");
+    const LOG = "/tmp/dy-messages.jsonl";
+    if (!fs.existsSync(LOG)) fs.writeFileSync(LOG, "");
+    console.error("Watching for new messages... (Ctrl+C to stop)");
+    let size = fs.statSync(LOG).size;
+    const watcher = fs.watch(LOG, () => {
+      const newSize = fs.statSync(LOG).size;
+      if (newSize > size) {
+        const fd = fs.openSync(LOG, "r");
+        const buf = Buffer.alloc(newSize - size);
+        fs.readSync(fd, buf, 0, buf.length, size);
+        fs.closeSync(fd);
+        size = newSize;
+        const lines = buf.toString().trim().split("\n").filter(Boolean);
+        for (const line of lines) console.log(line);
+      }
+    });
+    process.on("SIGINT", () => { watcher.close(); process.exit(0); });
+    // Keep alive
+    await new Promise(() => {});
+  },
+
+  async drain() {
+    // Non-blocking: read any unread messages from cursor, print them, exit immediately.
+    // Returns nothing if fully caught up.
+    const fs = await import("node:fs");
+    const LOG = "/tmp/dy-messages.jsonl";
+    const CURSOR = "/tmp/dy-messages.cursor";
+    if (!fs.existsSync(LOG)) return;
+
+    let cursor = 0;
+    try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+    const currentSize = fs.statSync(LOG).size;
+
+    if (currentSize > cursor) {
+      const fd = fs.openSync(LOG, "r");
+      const buf = Buffer.alloc(currentSize - cursor);
+      fs.readSync(fd, buf, 0, buf.length, cursor);
+      fs.closeSync(fd);
+      fs.writeFileSync(CURSOR, String(currentSize));
+      const lines = buf.toString().trim().split("\n").filter(Boolean).filter((line) => {
+        try {
+          const msg = JSON.parse(line);
+          return isAllowedChat(msg.convId) && !msg.isBotMessage;
+        } catch { return false; }
+      });
+      for (const line of lines) console.log(line);
+    }
+  },
+
+  async "wait-one"() {
+    // Block until new message(s) arrive from allowed chats, print them, exit.
+    // Uses a cursor file to track read position — never misses messages.
+    // Filters by config.json allowedChats at the CLI level.
+    const fs = await import("node:fs");
+    const LOG = "/tmp/dy-messages.jsonl";
+    const CURSOR = "/tmp/dy-messages.cursor";
+    if (!fs.existsSync(LOG)) fs.writeFileSync(LOG, "");
+
+    function readAndFilter(fromPos, toPos) {
+      if (toPos <= fromPos) return [];
+      const fd = fs.openSync(LOG, "r");
+      const buf = Buffer.alloc(toPos - fromPos);
+      fs.readSync(fd, buf, 0, buf.length, fromPos);
+      fs.closeSync(fd);
+      return buf.toString().trim().split("\n").filter(Boolean).filter((line) => {
+        try {
+          const msg = JSON.parse(line);
+          return isAllowedChat(msg.convId) && !msg.isBotMessage;
+        } catch { return false; }
+      });
+    }
+
+    let cursor = 0;
+    try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+
+    const currentSize = fs.statSync(LOG).size;
+
+    // If there are unread lines, return filtered ones immediately
+    if (currentSize > cursor) {
+      fs.writeFileSync(CURSOR, String(currentSize));
+      const lines = readAndFilter(cursor, currentSize);
+      if (lines.length > 0) {
+        for (const line of lines) console.log(line);
+        return;
+      }
+    }
+
+    // No unread lines — watch for new ones
+    let size = currentSize;
+    return new Promise((resolve) => {
+      const watcher = fs.watch(LOG, () => {
+        try {
+          const newSize = fs.statSync(LOG).size;
+          if (newSize > size) {
+            const prevSize = size;
+            size = newSize;
+            fs.writeFileSync(CURSOR, String(newSize));
+            const lines = readAndFilter(prevSize, newSize);
+            if (lines.length > 0) {
+              for (const line of lines) console.log(line);
+              watcher.close();
+              clearTimeout(timer);
+              resolve();
+            }
+            // If all lines were filtered out, keep watching
+          }
+        } catch {}
+      });
+      const timer = setTimeout(() => {
+        watcher.close();
+        fs.writeFileSync(CURSOR, String(size));
+        resolve();
+      }, 120000);
+    });
+  },
+
+  async "listen-loop"(mode = "proactive") {
+    // Deterministic listener loop. Handles: watch, filter, batch, context loading.
+    // Outputs one JSON event per batch that needs LLM attention.
+    // mode: "proactive" (all messages) or "mention" (only @botname mentions)
+    const fs = await import("node:fs");
+    const { join } = await import("node:path");
+    const LOG = "/tmp/dy-messages.jsonl";
+    const CURSOR = "/tmp/dy-messages.cursor";
+    const LOCK = "/tmp/dy-listen.lock";
+    const MEMORY_DIR = join(USER_DIR, "memory");
+    if (!fs.existsSync(LOG)) fs.writeFileSync(LOG, "");
+    if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
+
+    // Read persona signature for self-message detection
+    const signature = loadSignature();
+
+    const triggerName = loadTriggerName(); // lowercase
+
+    function readUnread() {
+      let cursor = 0;
+      try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+      const currentSize = fs.statSync(LOG).size;
+      if (currentSize <= cursor) return [];
+      const fd = fs.openSync(LOG, "r");
+      const buf = Buffer.alloc(currentSize - cursor);
+      fs.readSync(fd, buf, 0, buf.length, cursor);
+      fs.closeSync(fd);
+      fs.writeFileSync(CURSOR, String(currentSize));
+      return buf.toString().trim().split("\n").filter(Boolean).map(line => {
+        try { return JSON.parse(line); } catch { return null; }
+      }).filter(Boolean);
+    }
+
+    function filterMessages(msgs) {
+      return msgs.filter(m => {
+        if (!isAllowedChat(m.convId)) return false;
+        if (m.text && m.text.endsWith(signature)) return false;
+        // In proactive mode, pass sticker, image, and video share messages through
+        const isSticker = m.type === 5;
+        const isImage = m.aweType === 2702 || m.type === 27;
+        const isVideoShare = m.aweType === 800 || m.type === 8;
+        if (!m.text && !isSticker && !isImage && !isVideoShare && m.type !== 7) return false;
+        if (mode === "mention") {
+          return m.text && m.text.toLowerCase().includes(triggerName);
+        }
+        return true; // proactive: pass all text, sticker, image, and video share messages through
+      });
+    }
+
+    function loadMemory(convId) {
+      const memPath = join(MEMORY_DIR, `${convId}.md`);
+      try { return fs.readFileSync(memPath, "utf8"); } catch { return ""; }
+    }
+
+    async function loadRecentMessages(convId) {
+      try {
+        const res = await fetch(`${BASE}/api/messages?convId=${convId}&limit=10`);
+        const data = await res.json();
+        if (!data.ok) return [];
+        return (data.data?.messages || []).map(m => {
+          const pc = m.parsedContent || {};
+          const isSticker = m.type === 5 || (pc.aweType >= 500 && pc.aweType < 600);
+          const isImage = pc.aweType === 2702 || m.type === 27;
+          const isVideoShare = pc.aweType === 800 || m.type === 8;
+          const entry = {
+            sender: m.sender,
+            isSelfSend: m.isSelfSend,
+            text: pc.text || "",
+            createdAt: m.createdAt,
+          };
+          if (isSticker) {
+            entry.stickerUrl = pc.url?.url_list?.[0] || "";
+            entry.stickerKeyword = pc.display_name || pc.keyword || "";
+          }
+          if (isImage) {
+            const url = pc.resource_url || {};
+            entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || "";
+            entry.imageThumbUrl = url.thumb_url_list?.[0] || "";
+            entry.imageWidth = pc.cover_width || 0;
+            entry.imageHeight = pc.cover_height || 0;
+          }
+          if (isVideoShare) {
+            entry.videoTitle = pc.content_title || "";
+            entry.videoAuthor = pc.content_name || "";
+            entry.videoCoverUrl = pc.cover_url?.url_list?.[0] || "";
+            entry.videoItemId = pc.itemId || "";
+          }
+          return entry;
+        });
+      } catch { return []; }
+    }
+
+    // Check lock first
+    if (!fs.existsSync(LOCK)) {
+      console.log(JSON.stringify({ type: "shutdown" }));
+      return;
+    }
+
+    // Wait for new messages (blocks until messages arrive or 120s timeout)
+    const msgs = await new Promise((resolve) => {
+      const unread = readUnread();
+      if (unread.length > 0) { resolve(unread); return; }
+
+      const watcher = fs.watch(LOG, () => {
+        const newMsgs = readUnread();
+        if (newMsgs.length > 0) {
+          watcher.close();
+          clearTimeout(timer);
+          resolve(newMsgs);
+        }
+      });
+      const timer = setTimeout(() => { watcher.close(); resolve([]); }, 120000);
+    });
+
+    if (msgs.length === 0) {
+      console.log(JSON.stringify({ type: "timeout" }));
+      return;
+    }
+
+    // Brief batch window — wait 1.5s for rapid-fire messages
+    await new Promise(r => setTimeout(r, 1500));
+    const extra = readUnread();
+    const allMsgs = [...msgs, ...extra];
+
+    // Filter
+    const filtered = filterMessages(allMsgs);
+    if (filtered.length === 0) {
+      console.log(JSON.stringify({ type: "filtered" }));
+      return;
+    }
+
+    // Group by conversation, emit first conversation's event
+    const byConv = {};
+    for (const m of filtered) {
+      if (!byConv[m.convId]) byConv[m.convId] = [];
+      byConv[m.convId].push(m);
+    }
+
+    const nickMap = await buildNicknameMap();
+
+    for (const [convId, convMsgs] of Object.entries(byConv)) {
+      const memory = loadMemory(convId);
+      const recent = await loadRecentMessages(convId);
+      const hasMention = convMsgs.some(m => m.text?.toLowerCase().includes(triggerName));
+
+      // Build a subset of nickname map for senders in this batch
+      const senderIds = new Set([
+        ...convMsgs.map(m => m.sender),
+        ...recent.map(m => m.sender),
+      ]);
+      const nicknames = {};
+      for (const uid of senderIds) {
+        if (uid && nickMap[uid]) nicknames[uid] = nickMap[uid];
+      }
+
+      // Enrich sticker messages with cached interpretations
+      const enriched = convMsgs.map(m => {
+        if (m.stickerUrl || m.stickerKeyword) {
+          const cached = stickerLookup(m.stickerUrl, m.stickerKeyword);
+          if (cached) return { ...m, stickerInterpretation: cached };
+        }
+        return m;
+      });
+
+      console.log(JSON.stringify({
+        type: "messages",
+        convId,
+        messages: enriched,
+        nicknames,
+        hasMention,
+        memory: memory.slice(0, 3000),
+        recentContext: recent.slice(0, 10),
+        mode,
+      }));
+    }
+  },
+
+  async "listen-conv"(convId, mode = "proactive") {
+    // Per-conversation listener. Watches only one convId.
+    // Uses its own cursor file so multiple can run in parallel.
+    if (!convId) {
+      console.error("Usage: dy listen-conv <convId> [mode]");
+      process.exit(1);
+    }
+    const fs = await import("node:fs");
+    const { join } = await import("node:path");
+    const LOG = "/tmp/dy-messages.jsonl";
+    const CURSOR = `/tmp/dy-listen-${convId}.cursor`;
+    const LOCK = `/tmp/dy-listen-${convId}.lock`;
+    const MEMORY_DIR = join(USER_DIR, "memory");
+    if (!fs.existsSync(LOG)) fs.writeFileSync(LOG, "");
+    if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
+
+    const signature = loadSignature();
+    const triggerName = loadTriggerName();
+
+    function readUnread() {
+      let cursor = 0;
+      try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+      const currentSize = fs.statSync(LOG).size;
+      if (currentSize <= cursor) return [];
+      const fd = fs.openSync(LOG, "r");
+      const buf = Buffer.alloc(currentSize - cursor);
+      fs.readSync(fd, buf, 0, buf.length, cursor);
+      fs.closeSync(fd);
+      fs.writeFileSync(CURSOR, String(currentSize));
+      return buf.toString().trim().split("\n").filter(Boolean).map(line => {
+        try { return JSON.parse(line); } catch { return null; }
+      }).filter(Boolean);
+    }
+
+    function filterForConv(msgs) {
+      return msgs.filter(m => {
+        if (m.convId !== convId) return false;
+        if (m.text && m.text.endsWith(signature)) return false;
+        const isSticker = m.type === 5;
+        const isImage = m.aweType === 2702 || m.type === 27;
+        const isVideoShare = m.aweType === 800 || m.type === 8;
+        if (!m.text && !isSticker && !isImage && !isVideoShare && m.type !== 7) return false;
+        if (mode === "mention") {
+          return m.text && m.text.toLowerCase().includes(triggerName);
+        }
+        return true;
+      });
+    }
+
+    function loadMemory() {
+      const memPath = join(MEMORY_DIR, `${convId}.md`);
+      try { return fs.readFileSync(memPath, "utf8"); } catch { return ""; }
+    }
+
+    async function loadRecentMessages() {
+      try {
+        const res = await fetch(`${BASE}/api/messages?convId=${convId}&limit=10`);
+        const data = await res.json();
+        if (!data.ok) return [];
+        return (data.data?.messages || []).map(m => {
+          const pc = m.parsedContent || {};
+          const isSticker = m.type === 5 || (pc.aweType >= 500 && pc.aweType < 600);
+          const isImage = pc.aweType === 2702 || m.type === 27;
+          const isVideoShare = pc.aweType === 800 || m.type === 8;
+          const entry = { sender: m.sender, isSelfSend: m.isSelfSend, text: pc.text || "", createdAt: m.createdAt };
+          if (isSticker) { entry.stickerUrl = pc.url?.url_list?.[0] || ""; entry.stickerKeyword = pc.display_name || pc.keyword || ""; }
+          if (isImage) { const url = pc.resource_url || {}; entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || ""; entry.imageThumbUrl = url.thumb_url_list?.[0] || ""; }
+          if (isVideoShare) { entry.videoTitle = pc.content_title || ""; entry.videoAuthor = pc.content_name || ""; entry.videoCoverUrl = pc.cover_url?.url_list?.[0] || ""; }
+          return entry;
+        });
+      } catch { return []; }
+    }
+
+    // Check lock
+    if (!fs.existsSync(LOCK)) {
+      console.log(JSON.stringify({ type: "shutdown" }));
+      return;
+    }
+
+    // Wait for messages for this conversation
+    const msgs = await new Promise((resolve) => {
+      const unread = filterForConv(readUnread());
+      if (unread.length > 0) { resolve(unread); return; }
+
+      const watcher = fs.watch(LOG, () => {
+        const newMsgs = filterForConv(readUnread());
+        if (newMsgs.length > 0) {
+          watcher.close();
+          clearTimeout(timer);
+          resolve(newMsgs);
+        }
+      });
+      const timer = setTimeout(() => { watcher.close(); resolve([]); }, 120000);
+    });
+
+    if (msgs.length === 0) {
+      console.log(JSON.stringify({ type: "timeout" }));
+      return;
+    }
+
+    // Batch window — 1s for per-conv (shorter than global)
+    await new Promise(r => setTimeout(r, 1000));
+    const extra = filterForConv(readUnread());
+    const allMsgs = [...msgs, ...extra];
+
+    if (allMsgs.length === 0) {
+      console.log(JSON.stringify({ type: "filtered" }));
+      return;
+    }
+
+    const nickMap = await buildNicknameMap();
+    const memory = loadMemory();
+    const recent = await loadRecentMessages();
+    const hasMention = allMsgs.some(m => m.text?.toLowerCase().includes(triggerName));
+
+    const senderIds = new Set([...allMsgs.map(m => m.sender), ...recent.map(m => m.sender)]);
+    const nicknames = {};
+    for (const uid of senderIds) {
+      if (uid && nickMap[uid]) nicknames[uid] = nickMap[uid];
+    }
+
+    // Enrich stickers with cache
+    const enriched = allMsgs.map(m => {
+      if (m.stickerUrl || m.stickerKeyword) {
+        const cached = stickerLookup(m.stickerUrl, m.stickerKeyword);
+        if (cached) return { ...m, stickerInterpretation: cached };
+      }
+      return m;
+    });
+
+    console.log(JSON.stringify({
+      type: "messages",
+      convId,
+      messages: enriched,
+      nicknames,
+      hasMention,
+      memory: memory.slice(0, 3000),
+      recentContext: recent.slice(0, 10),
+      mode,
+    }));
+  },
+
+  async "listen-supervisor"() {
+    // Watches for active conversations. Emits which convIds have new messages.
+    // Does NOT emit message content — just signals for the supervisor agent.
+    const fs = await import("node:fs");
+    const LOG = "/tmp/dy-messages.jsonl";
+    const CURSOR = "/tmp/dy-listen-supervisor.cursor";
+    const LOCK = "/tmp/dy-listen.lock";
+    if (!fs.existsSync(LOG)) fs.writeFileSync(LOG, "");
+
+    const signature = loadSignature();
+    const seenConvs = new Set();
+
+    function readUnread() {
+      let cursor = 0;
+      try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+      const currentSize = fs.statSync(LOG).size;
+      if (currentSize <= cursor) return [];
+      const fd = fs.openSync(LOG, "r");
+      const buf = Buffer.alloc(currentSize - cursor);
+      fs.readSync(fd, buf, 0, buf.length, cursor);
+      fs.closeSync(fd);
+      fs.writeFileSync(CURSOR, String(currentSize));
+      return buf.toString().trim().split("\n").filter(Boolean).map(line => {
+        try { return JSON.parse(line); } catch { return null; }
+      }).filter(Boolean);
+    }
+
+    // Check lock
+    if (!fs.existsSync(LOCK)) {
+      console.log(JSON.stringify({ type: "shutdown" }));
+      return;
+    }
+
+    // Wait for messages
+    const msgs = await new Promise((resolve) => {
+      const unread = readUnread();
+      if (unread.length > 0) { resolve(unread); return; }
+
+      const watcher = fs.watch(LOG, () => {
+        const newMsgs = readUnread();
+        if (newMsgs.length > 0) {
+          watcher.close();
+          clearTimeout(timer);
+          resolve(newMsgs);
+        }
+      });
+      const timer = setTimeout(() => { watcher.close(); resolve([]); }, 120000);
+    });
+
+    if (msgs.length === 0) {
+      console.log(JSON.stringify({ type: "timeout" }));
+      return;
+    }
+
+    // Brief batch window
+    await new Promise(r => setTimeout(r, 500));
+    const extra = readUnread();
+    const allMsgs = [...msgs, ...extra];
+
+    // Filter to allowed, non-bot messages
+    const relevant = allMsgs.filter(m => {
+      if (!isAllowedChat(m.convId)) return false;
+      if (m.text && m.text.endsWith(signature)) return false;
+      return true;
+    });
+
+    // Group by convId, emit conversation-active events
+    const activeConvs = new Set(relevant.map(m => m.convId));
+    const events = [];
+    for (const convId of activeConvs) {
+      const isNew = !seenConvs.has(convId);
+      seenConvs.add(convId);
+      events.push({ convId, isNew, messageCount: relevant.filter(m => m.convId === convId).length });
+    }
+
+    if (events.length === 0) {
+      console.log(JSON.stringify({ type: "filtered" }));
+      return;
+    }
+
+    console.log(JSON.stringify({ type: "conversations-active", conversations: events }));
+  },
+
+  async "drain-conv"(convId, ...flags) {
+    // Non-blocking: read any new messages for a specific conversation since cursor.
+    // With --wait-hot: if 3+ messages arrived in the last 60s, wait 2s for stragglers.
+    // Used by conversation agents before sending to check for new messages.
+    if (!convId) {
+      console.error("Usage: dy drain-conv <convId> [--wait-hot]");
+      process.exit(1);
+    }
+    const waitHot = flags.includes("--wait-hot");
+    const fs = await import("node:fs");
+    const LOG = "/tmp/dy-messages.jsonl";
+    const CURSOR = `/tmp/dy-listen-${convId}.cursor`;
+    if (!fs.existsSync(LOG)) { console.log(JSON.stringify({ messages: [], count: 0, hot: false })); return; }
+
+    const signature = loadSignature();
+
+    function readNewMessages() {
+      let cursor = 0;
+      try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+      const currentSize = fs.statSync(LOG).size;
+      if (currentSize <= cursor) return [];
+      const fd = fs.openSync(LOG, "r");
+      const buf = Buffer.alloc(currentSize - cursor);
+      fs.readSync(fd, buf, 0, buf.length, cursor);
+      fs.closeSync(fd);
+      fs.writeFileSync(CURSOR, String(currentSize));
+      return buf.toString().trim().split("\n").filter(Boolean).map(line => {
+        try { return JSON.parse(line); } catch { return null; }
+      }).filter(Boolean).filter(m => {
+        if (m.convId !== convId) return false;
+        if (m.text && m.text.endsWith(signature)) return false;
+        return true;
+      });
+    }
+
+    let messages = readNewMessages();
+
+    // Detect "hot" conversation: 3+ messages in last 60s
+    const now = Date.now();
+    const recentCount = messages.filter(m => m.createdAt && (now - m.createdAt) < 60000).length;
+    const isHot = recentCount >= 3;
+
+    // If hot and --wait-hot flag, wait 2s then drain again to catch stragglers
+    if (isHot && waitHot) {
+      await new Promise(r => setTimeout(r, 2000));
+      const extra = readNewMessages();
+      messages = [...messages, ...extra];
+    }
+
+    // Enrich stickers
+    const enriched = messages.map(m => {
+      if (m.stickerUrl || m.stickerKeyword) {
+        const cached = stickerLookup(m.stickerUrl, m.stickerKeyword);
+        if (cached) return { ...m, stickerInterpretation: cached };
+      }
+      return m;
+    });
+
+    console.log(JSON.stringify({ messages: enriched, count: enriched.length, hot: isHot }));
+  },
+
+  async "sticker-cache"(action, ...args) {
+    if (!action || action === "help") {
+      console.log(`Usage: dy sticker-cache <action>
+
+Actions:
+  list                          List all cached sticker interpretations
+  lookup <url>                  Look up a sticker by URL
+  store <url> <interpretation>  Cache a sticker interpretation (optional: --keyword <kw>)
+  stats                         Show cache statistics
+  clear                         Clear the entire cache
+`);
+      return;
+    }
+
+    if (action === "list") {
+      const entries = stickerList();
+      if (entries.length === 0) { console.log("Cache is empty."); return; }
+      for (const e of entries) {
+        const kw = e.keyword ? ` (${e.keyword})` : "";
+        console.log(`  [${e.hitCount} hits]${kw} ${truncate(e.interpretation, 50)}`);
+        console.log(`    ${truncate(e.url, 80)}`);
+      }
+      console.log(`\n${entries.length} entries total.`);
+      return;
+    }
+
+    if (action === "lookup") {
+      const url = args[0];
+      if (!url) { console.error("Usage: dy sticker-cache lookup <url>"); process.exit(1); }
+      const result = stickerLookup(url, null);
+      if (result) { console.log(result); } else { console.log("Not found in cache."); }
+      return;
+    }
+
+    if (action === "store") {
+      const url = args[0];
+      const kwIdx = args.indexOf("--keyword");
+      let keyword = "";
+      let interpParts = args.slice(1);
+      if (kwIdx > 0) {
+        keyword = args[kwIdx + 1] || "";
+        interpParts = [...args.slice(1, kwIdx), ...args.slice(kwIdx + 2)];
+      }
+      const interpretation = interpParts.join(" ");
+      if (!url || !interpretation) {
+        console.error("Usage: dy sticker-cache store <url> <interpretation> [--keyword <kw>]");
+        process.exit(1);
+      }
+      stickerStore(url, interpretation, keyword);
+      console.log("Stored.");
+      return;
+    }
+
+    if (action === "stats") {
+      console.log(JSON.stringify(stickerStats(), null, 2));
+      return;
+    }
+
+    if (action === "clear") {
+      stickerClear();
+      console.log("Cache cleared.");
+      return;
+    }
+
+    console.error(`Unknown action: ${action}. Run "dy sticker-cache help".`);
+    process.exit(1);
+  },
+
+  async search(query) {
+    if (!query) {
+      console.error("Usage: dy search <query>");
+      process.exit(1);
+    }
+    const { data } = await api(`/api/search?query=${encodeURIComponent(query)}`);
+    console.log(JSON.stringify(data, null, 2));
+  },
+
+  async members(convId) {
+    if (!convId) {
+      console.error("Usage: dy members <convId>");
+      process.exit(1);
+    }
+    const [{ data: convData }, nickMap] = await Promise.all([
+      api(`/api/conv?convId=${convId}`),
+      buildNicknameMap(),
+    ]);
+    const conv = convData?.conversation || {};
+    const participants = conv.firstPage?.participants || [];
+    const members = participants.map(p => ({
+      uid: p.userId,
+      nickname: nickMap[p.userId] || p.userId,
+      role: p.role === 1 ? "owner" : p.role === 2 ? "admin" : "member",
+    }));
+    console.log(JSON.stringify({
+      convId,
+      name: conv.coreInfo?.name || "",
+      participantCount: conv.participantCount || members.length,
+      members,
+    }, null, 2));
+  },
+
+  async conv(convId) {
+    if (!convId) {
+      console.error("Usage: dy conv <convId>");
+      process.exit(1);
+    }
+    const { data } = await api(`/api/conv?convId=${convId}`);
+    console.log(JSON.stringify(data, null, 2));
+  },
+
+  async raw(path) {
+    if (!path) {
+      console.error("Usage: dy raw <path>  (e.g. dy raw /api/ws-status)");
+      process.exit(1);
+    }
+    const data = await api(path);
+    console.log(JSON.stringify(data, null, 2));
+  },
+};
+
+async function main() {
+  const [cmd, ...args] = process.argv.slice(2);
+
+  if (!cmd || cmd === "help" || cmd === "--help") {
+    console.log(`dy-chat-bot — CLI for 抖音聊天
+
+Usage: dy <command> [args]
+
+Commands:
+  health                     Check if the API server is running
+  user                       Show current logged-in user
+  conversations              List all conversations
+  contacts                   List friends/contacts
+  messages <convId> [limit]  Get messages from a conversation
+  send <convId> <message>    Send a message to a conversation
+  poll [since_ts]            Poll for new incoming messages
+  watch                      Stream new messages continuously (Ctrl+C to stop)
+  wait-one                   Block until next message arrives, print it, exit
+  drain                      Print any unread messages immediately (non-blocking)
+  listen-loop [mode]         Deterministic listener loop (proactive|mention)
+  listen-conv <convId> [m]   Per-conversation listener (one conv only)
+  listen-supervisor          Supervisor: emit active conversation signals
+  drain-conv <convId>        Non-blocking check for new messages in a conv
+  sticker-cache <action>     Manage sticker interpretation cache
+  search <query>             Search messages
+  conv <convId>              Get conversation detail with last message
+  raw <path>                 Raw API call (e.g. /api/ws-status)
+  help                       Show this help
+
+The app must be running with the injected API server (port 3456).
+Launch: open -a "抖音聊天"
+`);
+    return;
+  }
+
+  if (!commands[cmd]) {
+    console.error(`Unknown command: ${cmd}. Run "dy help" for usage.`);
+    process.exit(1);
+  }
+
+  try {
+    await commands[cmd](...args);
+  } catch (err) {
+    if (err.cause?.code === "ECONNREFUSED") {
+      console.error("Cannot connect to API server at port 3456.");
+      console.error('Make sure 抖音聊天 is running: open -a "抖音聊天"');
+      process.exit(1);
+    }
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+main();

@@ -1,0 +1,13 @@
+{
+  "name": "dy-chat-bot",
+  "version": "1.0.0",
+  "description": "CLI for Douyin Chat (抖音聊天) automation with Claude Code AI integration",
+  "type": "module",
+  "bin": {
+    "dy": "./cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js"
+  },
+  "license": "MIT"
+}
