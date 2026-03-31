@@ -17,6 +17,10 @@ Set up dy-chat-bot for reading and sending messages in 抖音聊天 (Douyin Chat
 - **Default project dir**: `~/dy-chat-bot`
 - **Path config**: `~/.dy-chat-bot-path`
 
+## Important: Use AskUserQuestion
+
+Every question to the user MUST use the **AskUserQuestion** tool. Never combine multiple questions into one. Ask one question at a time, wait for the answer, then proceed.
+
 ## Execution
 
 Walk the user through each step. Check what's already configured and skip completed steps.
@@ -41,18 +45,16 @@ The project needs `cli.js` in a directory on disk, with user data in `user/`.
 echo "/absolute/path/to/project" > ~/.dy-chat-bot-path
 ```
 
-**If NOT found**: ask the user where to set up the project (default: `~/dy-chat-bot`), then clone:
+**If NOT found**: use AskUserQuestion:
+> Where should I set up the project? (default: ~/dy-chat-bot)
+
+Then clone:
 ```bash
 git clone https://github.com/<OWNER>/dy-chat-bot.git <chosen-path>
 echo "<chosen-path>" > ~/.dy-chat-bot-path
 ```
 
-If `git clone` fails (no internet, repo not found), tell the user:
-> I couldn't clone the repo. Please clone it manually:
-> `git clone <repo-url> ~/dy-chat-bot`
-> Then run `/dy-setup` again.
-
-Then stop.
+If `git clone` fails, tell the user to clone manually and run `/dy-setup` again. Stop.
 
 ### Step 3: Ensure user data directory exists
 
@@ -112,14 +114,25 @@ Stop here.
 
 ### Step 6: Configure persona
 
-Read the current `user/PERSONA.md`. Ask the user these questions (show current values as defaults):
+Read the current `user/PERSONA.md`. Ask each question **one at a time** using AskUserQuestion, showing the current value as default:
 
-1. **Bot name** — What should your bot be called?
-2. **Trigger word** — What word should trigger the bot? (default: bot name, lowercase)
-3. **Signature** — Appended to all sent messages (default: `[BotName]`)
-4. **Owner name** — Your name
-5. **Personality** — Any tweaks, or keep defaults?
-6. **Language** — Chinese, English, bilingual, or other?
+**6a.** AskUserQuestion:
+> What should your bot be called? (current: <current name>)
+
+**6b.** AskUserQuestion:
+> What word should trigger the bot? (default: <bot name lowercase>)
+
+**6c.** AskUserQuestion:
+> What signature should be appended to sent messages? (default: [<BotName>])
+
+**6d.** AskUserQuestion:
+> What's your name? (for the Owner field)
+
+**6e.** AskUserQuestion:
+> Any personality tweaks? Describe how the bot should behave, or say "keep defaults"
+
+**6f.** AskUserQuestion:
+> What language should the bot use? (Chinese / English / bilingual / other)
 
 Update `user/PERSONA.md` using the Edit tool with their answers. Only change what they specified.
 
@@ -127,24 +140,29 @@ Update `user/PERSONA.md` using the Edit tool with their answers. Only change wha
 
 Run `node cli.js conversations` from the project directory and show the user the **full list** — both group chats and one-to-one DMs. Display the type (DM/Group) next to each name so the user can tell them apart.
 
-Ask:
+AskUserQuestion:
 > Which conversations should the bot monitor? You can pick groups, DMs, or both.
-> Enter conversation IDs or names, or "all" to monitor everything.
+> Enter conversation IDs, names, or "all" to monitor everything.
 
 Update `user/config.json` with their selections:
 - If "all" → set `"allowedChats": {}`
-- Otherwise → set `"allowedChats": { "<id>": "<name>", ... }`
+- Otherwise → set `"allowedChats": { "<id>": { "name": "<name>" }, ... }`
 
-### Step 8: Configure agent model
+### Step 8: Configure default model
 
-Ask:
-> Which AI model should the bot use? (default: sonnet)
-> Options: **sonnet** (fast, recommended), **opus** (smartest, slower), **haiku** (cheapest, fastest)
+AskUserQuestion:
+> Which AI model should the bot use by default?
+> - **sonnet** — fast, good balance (recommended)
+> - **opus** — smartest, slower, more expensive
+> - **haiku** — cheapest, fastest, less capable
 
 Update `user/config.json` with `"defaultModel": "<choice>"`.
 
-Then ask:
-> Want to use a different model for any specific conversation? (e.g. opus for your VIP group)
+### Step 9: Per-conversation model overrides
+
+AskUserQuestion:
+> Want to use a different model for any specific conversation? (e.g. opus for a VIP group)
+> Say "no" to skip, or list conversations and their models.
 
 If yes, for each conversation they specify, update the corresponding `allowedChats` entry to include `"model": "<choice>"`. Example:
 ```json
@@ -153,9 +171,7 @@ If yes, for each conversation they specify, update the corresponding `allowedCha
 }
 ```
 
-If no, move on.
-
-### Step 9: Summary and start
+### Step 10: Summary and start
 
 Print:
 
@@ -170,8 +186,8 @@ Setup complete!
   Default model:   <model>
 ```
 
-Then ask:
-> Want to start the bot now?
+AskUserQuestion:
+> Want to start the bot now? (yes/no)
 
 If yes: invoke the `/dy-start` skill to launch the listener immediately.
 
