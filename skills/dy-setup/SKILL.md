@@ -135,7 +135,27 @@ Update `user/config.json` with their selections:
 - If "all" → set `"allowedChats": {}`
 - Otherwise → set `"allowedChats": { "<id>": "<name>", ... }`
 
-### Step 8: Summary and start
+### Step 8: Configure agent model
+
+Ask:
+> Which AI model should the bot use? (default: sonnet)
+> Options: **sonnet** (fast, recommended), **opus** (smartest, slower), **haiku** (cheapest, fastest)
+
+Update `user/config.json` with `"defaultModel": "<choice>"`.
+
+Then ask:
+> Want to use a different model for any specific conversation? (e.g. opus for your VIP group)
+
+If yes, for each conversation they specify, update the corresponding `allowedChats` entry to include `"model": "<choice>"`. Example:
+```json
+"allowedChats": {
+  "123456": { "name": "My Group", "model": "opus" }
+}
+```
+
+If no, move on.
+
+### Step 9: Summary and start
 
 Print:
 
@@ -147,6 +167,7 @@ Setup complete!
   Trigger:         <trigger>
   Signature:       <signature>
   Monitored chats: <list or "all">
+  Default model:   <model>
 ```
 
 Then ask:
