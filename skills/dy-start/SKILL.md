@@ -65,9 +65,28 @@ Otherwise, proceed with **Step 2A (Multi-Agent Mode)**.
 
 ### Step 2A: Multi-Agent Mode (default)
 
-#### 2A.1: Load allowed chats
+#### 2A.1: Pre-fetch shared data (do this ONCE, before spawning any agents)
 
-Read `user/config.json` to get `allowedChats`. If empty, run `node cli.js conversations` to get all conversation IDs.
+This avoids every agent making the same API calls on startup.
+
+1. Read `user/config.json` to get `allowedChats`. If empty, run `node cli.js conversations` to get all conversation IDs.
+2. Run `node cli.js user` to get the bot's own UID.
+3. For **each** conversation, run `node cli.js members <convId>` and save the output.
+4. For DM conversations (those with only 2 members), run `node cli.js shared-groups <theirUid>` to find shared group chats. For each shared group, read `user/memory/<groupConvId>.md`. Build a summary of shared context per DM (max 20 lines each).
+5. Save all pre-fetched data to `/tmp/dy-startup.json` using the Write tool:
+```json
+{
+  "botUid": "<uid>",
+  "conversations": {
+    "<convId>": {
+      "name": "<name>",
+      "members": [{"uid": "...", "nickname": "...", "role": "..."}],
+      "isDM": false,
+      "sharedGroupContext": ""
+    }
+  }
+}
+```
 
 For each conversation, create a per-conversation lock file:
 ```bash
@@ -85,7 +104,7 @@ For **each** allowed conversation, use the **Agent tool** with `run_in_backgroun
 
 Pass the model to the Agent tool: `model: "<resolved_model>"`
 
-The agent prompt for each conversation agent should be (replace `<CONV_ID>` and `<CONV_NAME>` with actual values):
+The agent prompt for each conversation agent should be (replace `<CONV_ID>`, `<CONV_NAME>`, `<MEMBERS_JSON>`, and `<SHARED_CONTEXT>` with actual values from the pre-fetched data):
 
 ---
 
@@ -93,17 +112,17 @@ You are the chat bot defined in `user/PERSONA.md`. First, read `~/.dy-chat-bot-p
 
 You are responsible for ONE conversation only: **`<CONV_ID>`** (`<CONV_NAME>`).
 
-**Startup — load context:**
+**Pre-loaded context (already fetched — do NOT re-fetch):**
 
-1. Run: `cd "$DY_DIR" && node cli.js members <CONV_ID>`
-2. Read `user/memory/<CONV_ID>.md` (if it exists) for conversation history and context.
-3. Update or create a `## Members` section at the top of `user/memory/<CONV_ID>.md` with the chat name and member list (uid → nickname, role). Preserve all other content.
-4. **DM cross-memory** — if this is a DM (type 1 conversation, with only 2 members):
-   - From the members output (step 1), identify the other person's UID (the one that is NOT the bot's own UID from `node cli.js user`).
-   - Run: `cd "$DY_DIR" && node cli.js shared-groups <theirUid>` — this returns all group chats containing that person (searches `## Members` sections in all memory files).
-   - For each group returned (excluding the current DM's own convId), read `user/memory/<groupConvId>.md`.
-   - Append a `## Shared Group Context` section at the bottom of `user/memory/<CONV_ID>.md` summarizing key topics and interactions involving that person from the shared group chats. Keep it concise (max 20 lines). Update this section each time the bot starts.
-   - This gives you context about what this person talks about in groups, making DM conversations more natural.
+Members: <MEMBERS_JSON>
+
+Shared group context: <SHARED_CONTEXT>
+
+**Startup — load memory only:**
+
+1. Read `user/memory/<CONV_ID>.md` (if it exists) for conversation history.
+
+That's it. Go straight to the loop — members and shared context are already provided above.
 
 **Loop (repeat forever):**
 
@@ -113,11 +132,11 @@ You are responsible for ONE conversation only: **`<CONV_ID>`** (`<CONV_NAME>`).
    - `{"type":"timeout"}` or `{"type":"filtered"}` → go to step 1
    - `{"type":"messages",...}` → decide whether to respond (step 3)
 3. Decide: The event JSON includes `messages`, `hasMention`, `memory`, and `recentContext`. ALWAYS respond if `hasMention` is true. Otherwise respond only if the bot can add value. **When in doubt, stay silent.**
-4. **Rich media handling** — before deciding whether to respond, understand ALL non-text content:
-   - **Stickers**: When entries have `stickerInterpretation` (cache hit), use that directly — no need to download. When entries have `stickerUrl` but NO `stickerInterpretation` (cache miss), download the image using WebFetch and read it, then cache the result: `cd "$DY_DIR" && node cli.js sticker-cache store "<stickerUrl>" "<your interpretation>" --keyword "<stickerKeyword>"`. React to sticker content naturally — this is key to the bot's personality.
-   - **Images** (aweType 2702): When entries have `imageUrl`, ALWAYS download the image using WebFetch and read it to see what it shows. Describe or react to the image content naturally in your response. Use `imageThumbUrl` if the full image is too large.
-   - **Video shares** (aweType 800): When entries have `videoTitle` and `videoAuthor`, read them to understand what was shared. Optionally download `videoCoverUrl` to see the video thumbnail. React to the shared video topic naturally.
-   - If a message has no `text` but has any of these media fields, fetch and understand the media before deciding whether to respond.
+4. **Rich media handling** — understand non-text content, but do NOT block on slow media:
+   - **Stickers with `stickerInterpretation`** (cache hit): use it directly. Instant.
+   - **Stickers with `stickerUrl` but NO `stickerInterpretation`** (cache miss): Spawn a **background subagent** (using Agent tool with `run_in_background: true`, `model: "haiku"`) to download the sticker via WebFetch, interpret it, and cache it: `cd "$DY_DIR" && node cli.js sticker-cache store "<url>" "<interpretation>" --keyword "<keyword>"`. Meanwhile, continue composing your response using the `stickerKeyword` as a hint. If no keyword, note "[sticker — interpreting...]" and respond to the rest of the messages. The cached interpretation will be available for next time.
+   - **Images** (aweType 2702): Spawn a **background subagent** (same pattern, `model: "haiku"`) to download via WebFetch and describe the image. Meanwhile, respond to text messages normally. If the image is the ONLY content and `hasMention` is true, wait for the subagent result before responding.
+   - **Video shares** (aweType 800): Use `videoTitle` and `videoAuthor` directly (no download needed). Optionally react to the topic.
 5. **Before sending** — peek gate (debounce check):
    - Run: `cd "$DY_DIR" && node cli.js peek-conv <CONV_ID>`
    - If `hasNew` is **true**: do NOT send your response. Go directly back to step 1. The next `listen-conv` will pick up all pending messages as a fresh batch, and you'll compose a new response with full context.
@@ -174,7 +193,6 @@ Before entering the loop, load member info for all monitored conversations (grou
 1. Read `user/config.json` to get `allowedChats`. If empty, run `node cli.js conversations` to get all conversations.
 2. For each conversation, run: `node cli.js members <convId>`
 3. Read the existing `user/memory/<convId>.md` file (if any).
-4. Update or create a `## Members` section at the top of `user/memory/<convId>.md` with the chat name and member list (uid → nickname, role). Preserve all other content in the memory file.
 
 This ensures you always know who's who when responding.
 
@@ -186,11 +204,11 @@ This ensures you always know who's who when responding.
    - `{"type":"timeout"}` or `{"type":"filtered"}` → go to step 1
    - `{"type":"messages",...}` → decide whether to respond (step 3)
 3. Decide: The event JSON includes `messages`, `hasMention`, `memory`, and `recentContext`. ALWAYS respond if `hasMention` is true. Otherwise respond only if the bot can add value. **When in doubt, stay silent.**
-4. **Rich media handling** — before deciding whether to respond, understand ALL non-text content:
-   - **Stickers**: When entries have `stickerInterpretation` (cache hit), use that directly — no need to download. When entries have `stickerUrl` but NO `stickerInterpretation` (cache miss), download the image using WebFetch and read it, then cache the result: `cd "$DY_DIR" && node cli.js sticker-cache store "<stickerUrl>" "<your interpretation>" --keyword "<stickerKeyword>"`. React to sticker content naturally — this is key to the bot's personality.
-   - **Images** (aweType 2702): When entries have `imageUrl`, ALWAYS download the image using WebFetch and read it to see what it shows. Describe or react to the image content naturally in your response. Use `imageThumbUrl` if the full image is too large.
-   - **Video shares** (aweType 800): When entries have `videoTitle` and `videoAuthor`, read them to understand what was shared. Optionally download `videoCoverUrl` to see the video thumbnail. React to the shared video topic naturally.
-   - If a message has no `text` but has any of these media fields, fetch and understand the media before deciding whether to respond.
+4. **Rich media handling** — understand non-text content, but do NOT block on slow media:
+   - **Stickers with `stickerInterpretation`** (cache hit): use it directly.
+   - **Stickers with `stickerUrl` but NO `stickerInterpretation`** (cache miss): Spawn a **background subagent** (`run_in_background: true`, `model: "haiku"`) to download, interpret, and cache. Continue responding using `stickerKeyword` as a hint.
+   - **Images**: Spawn a **background subagent** to download and describe. Respond to text messages meanwhile.
+   - **Video shares**: Use `videoTitle`/`videoAuthor` directly.
 5. If responding:
    - Read the `Signature` field from `user/PERSONA.md` and use that exact signature at the end of every sent message. Do NOT hardcode a signature.
    - **Quick**: `cd "$(cat ~/.dy-chat-bot-path)" && node cli.js send <convId> "<response> <signature>"`
