@@ -132,10 +132,10 @@ That's it. Go straight to the loop — members and shared context are already pr
    - `{"type":"timeout"}` or `{"type":"filtered"}` → go to step 1
    - `{"type":"messages",...}` → decide whether to respond (step 3)
 3. Decide: The event JSON includes `messages`, `hasMention`, `memory`, and `recentContext`. ALWAYS respond if `hasMention` is true. Otherwise respond only if the bot can add value. **When in doubt, stay silent.**
-4. **Rich media handling** — understand non-text content, but do NOT block on slow media:
+4. **Rich media handling** — understand non-text content. Stickers are always interpreted inline (they're small and core to personality). Large images are offloaded:
    - **Stickers with `stickerInterpretation`** (cache hit): use it directly. Instant.
-   - **Stickers with `stickerUrl` but NO `stickerInterpretation`** (cache miss): Spawn a **background subagent** (using Agent tool with `run_in_background: true`, `model: "haiku"`) to download the sticker via WebFetch, interpret it, and cache it: `cd "$DY_DIR" && node cli.js sticker-cache store "<url>" "<interpretation>" --keyword "<keyword>"`. Meanwhile, continue composing your response using the `stickerKeyword` as a hint. If no keyword, note "[sticker — interpreting...]" and respond to the rest of the messages. The cached interpretation will be available for next time.
-   - **Images** (aweType 2702): Spawn a **background subagent** (same pattern, `model: "haiku"`) to download via WebFetch and describe the image. Meanwhile, respond to text messages normally. If the image is the ONLY content and `hasMention` is true, wait for the subagent result before responding.
+   - **Stickers with `stickerUrl` but NO `stickerInterpretation`** (cache miss): Download the sticker image using WebFetch and read it to understand what it says/depicts. ALWAYS do this inline — do NOT skip or offload. After interpreting, cache the result: `cd "$DY_DIR" && node cli.js sticker-cache store "<stickerUrl>" "<your interpretation>" --keyword "<stickerKeyword>"`. React to sticker content naturally — this is key to the bot's personality.
+   - **Images** (aweType 2702): Spawn a **background subagent** (using Agent tool with `run_in_background: true`, `model: "haiku"`) to download via WebFetch and describe the image. The subagent should send the description back. Meanwhile, respond to text messages normally. If the image is the ONLY content and `hasMention` is true, wait for the subagent result before responding.
    - **Video shares** (aweType 800): Use `videoTitle` and `videoAuthor` directly (no download needed). Optionally react to the topic.
 5. **Before sending** — peek gate (debounce check):
    - Run: `cd "$DY_DIR" && node cli.js peek-conv <CONV_ID>`
@@ -204,10 +204,10 @@ This ensures you always know who's who when responding.
    - `{"type":"timeout"}` or `{"type":"filtered"}` → go to step 1
    - `{"type":"messages",...}` → decide whether to respond (step 3)
 3. Decide: The event JSON includes `messages`, `hasMention`, `memory`, and `recentContext`. ALWAYS respond if `hasMention` is true. Otherwise respond only if the bot can add value. **When in doubt, stay silent.**
-4. **Rich media handling** — understand non-text content, but do NOT block on slow media:
+4. **Rich media handling** — understand non-text content. Stickers are always interpreted inline:
    - **Stickers with `stickerInterpretation`** (cache hit): use it directly.
-   - **Stickers with `stickerUrl` but NO `stickerInterpretation`** (cache miss): Spawn a **background subagent** (`run_in_background: true`, `model: "haiku"`) to download, interpret, and cache. Continue responding using `stickerKeyword` as a hint.
-   - **Images**: Spawn a **background subagent** to download and describe. Respond to text messages meanwhile.
+   - **Stickers with `stickerUrl` but NO `stickerInterpretation`** (cache miss): Download via WebFetch, interpret, then cache: `cd "$DY_DIR" && node cli.js sticker-cache store "<url>" "<interpretation>" --keyword "<keyword>"`. React naturally.
+   - **Images**: Spawn a **background subagent** (`run_in_background: true`, `model: "haiku"`) to download and describe. Respond to text messages meanwhile.
    - **Video shares**: Use `videoTitle`/`videoAuthor` directly.
 5. If responding:
    - Read the `Signature` field from `user/PERSONA.md` and use that exact signature at the end of every sent message. Do NOT hardcode a signature.
