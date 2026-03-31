@@ -562,6 +562,33 @@ const commands = {
     }
   },
 
+  async "shared-groups"(uid) {
+    // Find all group chats that contain a given UID.
+    // Reads memory files' ## Members sections to find matches.
+    // Used by DM agents to cross-load group context.
+    if (!uid) {
+      console.error("Usage: dy shared-groups <uid>");
+      process.exit(1);
+    }
+    const fs = await import("node:fs");
+    const { join } = await import("node:path");
+    const MEMORY_DIR = join(USER_DIR, "memory");
+    if (!fs.existsSync(MEMORY_DIR)) { console.log(JSON.stringify({ groups: [] })); return; }
+
+    const files = fs.readdirSync(MEMORY_DIR).filter(f => f.startsWith("0:2:") && f.endsWith(".md"));
+    const groups = [];
+    for (const file of files) {
+      const content = fs.readFileSync(join(MEMORY_DIR, file), "utf8");
+      if (content.includes(uid)) {
+        const convId = file.replace(/\.md$/, "");
+        // Extract chat name from ## Members section
+        const nameMatch = content.match(/^##\s*Members\s*\n+(?:.*?name[:\s]*)?(.+)/im);
+        groups.push({ convId, file, name: nameMatch?.[1]?.trim() || convId });
+      }
+    }
+    console.log(JSON.stringify({ groups, count: groups.length }));
+  },
+
   async "listen-conv"(convId, mode = "proactive") {
     // Per-conversation listener. Watches only one convId.
     // Uses its own cursor file so multiple can run in parallel.
@@ -988,6 +1015,7 @@ Commands:
   wait-one                   Block until next message arrives, print it, exit
   drain                      Print any unread messages immediately (non-blocking)
   listen-loop [mode]         Deterministic listener loop (proactive|mention)
+  shared-groups <uid>        Find group chats containing a user
   listen-conv <convId> [m]   Per-conversation listener (one conv only)
   listen-supervisor          Supervisor: emit active conversation signals
   drain-conv <convId>        Non-blocking check for new messages in a conv
