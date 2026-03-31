@@ -14,15 +14,14 @@ Turns the 抖音聊天 desktop app into an AI group chat assistant:
 ## Quick Start
 
 ```bash
-git clone <this-repo> ~/dy-chat-bot
-cd ~/dy-chat-bot
-./install.sh -g    # install skills globally for your AI agents
+git clone https://github.com/terrytz/dy-chat-bot.git ~/dy-chat-bot && cd ~/dy-chat-bot && ./install.sh && claude --dangerously-skip-permissions "/dy-setup"
 ```
 
-Then in Claude Code (or any supported agent):
+This clones the repo, installs skills locally, and launches the interactive setup wizard in Claude Code.
+
+After setup, use these commands in Claude Code:
 
 ```
-/dy-setup          # interactive setup wizard
 /dy-start          # start the bot
 /dy-stop           # stop the bot
 ```
