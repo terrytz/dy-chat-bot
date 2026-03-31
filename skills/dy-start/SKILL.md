@@ -98,10 +98,10 @@ You are responsible for ONE conversation only: **`<CONV_ID>`** (`<CONV_NAME>`).
 1. Run: `cd "$DY_DIR" && node cli.js members <CONV_ID>`
 2. Read `user/memory/<CONV_ID>.md` (if it exists) for conversation history and context.
 3. Update or create a `## Members` section at the top of `user/memory/<CONV_ID>.md` with the chat name and member list (uid → nickname, role). Preserve all other content.
-4. **DM cross-memory** — if this is a DM (conv ID format `0:1:uid1:uid2`):
-   - Extract the other person's UID from the conv ID (the UID that is NOT the bot's own UID from `node cli.js user`).
-   - Run: `cd "$DY_DIR" && node cli.js shared-groups <theirUid>` — this returns all group chats containing that person.
-   - For each group returned, read `user/memory/<groupConvId>.md`.
+4. **DM cross-memory** — if this is a DM (type 1 conversation, with only 2 members):
+   - From the members output (step 1), identify the other person's UID (the one that is NOT the bot's own UID from `node cli.js user`).
+   - Run: `cd "$DY_DIR" && node cli.js shared-groups <theirUid>` — this returns all group chats containing that person (searches `## Members` sections in all memory files).
+   - For each group returned (excluding the current DM's own convId), read `user/memory/<groupConvId>.md`.
    - Append a `## Shared Group Context` section at the bottom of `user/memory/<CONV_ID>.md` summarizing key topics and interactions involving that person from the shared group chats. Keep it concise (max 20 lines). Update this section each time the bot starts.
    - This gives you context about what this person talks about in groups, making DM conversations more natural.
 

@@ -575,15 +575,17 @@ const commands = {
     const MEMORY_DIR = join(USER_DIR, "memory");
     if (!fs.existsSync(MEMORY_DIR)) { console.log(JSON.stringify({ groups: [] })); return; }
 
-    const files = fs.readdirSync(MEMORY_DIR).filter(f => f.startsWith("0:2:") && f.endsWith(".md"));
+    const files = fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith(".md"));
     const groups = [];
     for (const file of files) {
       const content = fs.readFileSync(join(MEMORY_DIR, file), "utf8");
-      if (content.includes(uid)) {
+      // Check if UID appears in the ## Members section specifically
+      const membersMatch = content.match(/## Members\n([\s\S]*?)(?=\n##|\n$|$)/);
+      if (membersMatch && membersMatch[1].includes(uid)) {
         const convId = file.replace(/\.md$/, "");
-        // Extract chat name from ## Members section
-        const nameMatch = content.match(/^##\s*Members\s*\n+(?:.*?name[:\s]*)?(.+)/im);
-        groups.push({ convId, file, name: nameMatch?.[1]?.trim() || convId });
+        // Extract chat name from the first line (e.g. "# 团购信息")
+        const titleMatch = content.match(/^#\s+(.+)/m);
+        groups.push({ convId, file, name: titleMatch?.[1]?.trim() || convId });
       }
     }
     console.log(JSON.stringify({ groups, count: groups.length }));
