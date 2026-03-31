@@ -29,7 +29,8 @@ node cli.js <command> [args]
 | `conv <convId>` | Get conversation detail |
 | `listen-conv <convId> [mode]` | Per-conversation listener (one conv only) |
 | `listen-supervisor` | Supervisor: emit active conversation signals |
-| `drain-conv <convId>` | Instant check for new messages in a conv |
+| `peek-conv <convId>` | Check for new messages without consuming them |
+| `drain-conv <convId>` | Consume and return new messages in a conv |
 | `sticker-cache <action>` | Manage sticker interpretation cache |
 | `raw <path>` | Raw API call (e.g. `/api/ws-status`) |
 
@@ -90,7 +91,8 @@ Each allowed conversation gets its own background agent:
 - **Conversation agents** run `listen-conv <convId>`, handle one chat independently
 - Each loads its own `user/memory/<convId>.md` for isolated context
 - Sticker interpretations are cached in `user/sticker-cache.json` (shared across agents)
-- Before sending in active conversations (3+ messages), agents do an instant drain to catch new messages
+- Rolling debounce in `listen-conv` (0.5s reset, 3s cap) batches rapid-fire messages
+- Before sending, agents peek for new messages — if found, they loop back and re-compose with full context
 
 ### Single-Agent Mode (with `/dy-start --single`)
 

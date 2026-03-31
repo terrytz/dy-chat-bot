@@ -691,10 +691,29 @@ const commands = {
       return;
     }
 
-    // Batch window — 1s for per-conv (shorter than global)
-    await new Promise(r => setTimeout(r, 1000));
-    const extra = filterForConv(readUnread());
-    const allMsgs = [...msgs, ...extra];
+    // Rolling debounce: 0.5s resets on each new message, 3s max cap
+    let allMsgs = [...msgs];
+    {
+      const DEBOUNCE_MS = 500;
+      const MAX_WAIT_MS = 3000;
+      const start = Date.now();
+      let done = false;
+      await new Promise((resolve) => {
+        const finish = () => { if (done) return; done = true; watcher2.close(); resolve(); };
+        let debounce = setTimeout(finish, DEBOUNCE_MS);
+        const maxCap = setTimeout(finish, MAX_WAIT_MS);
+        const watcher2 = fs.watch(LOG, () => {
+          const extra = filterForConv(readUnread());
+          if (extra.length > 0) {
+            allMsgs.push(...extra);
+            clearTimeout(debounce);
+            if (Date.now() - start < MAX_WAIT_MS - DEBOUNCE_MS) {
+              debounce = setTimeout(finish, DEBOUNCE_MS);
+            }
+          }
+        });
+      });
+    }
 
     if (allMsgs.length === 0) {
       console.log(JSON.stringify({ type: "filtered" }));
@@ -814,6 +833,46 @@ const commands = {
     }
 
     console.log(JSON.stringify({ type: "conversations-active", conversations: events }));
+  },
+
+  async "peek-conv"(convId) {
+    // Read-only check: are there unread messages for this conversation?
+    // Does NOT advance the cursor — messages remain available for listen-conv.
+    if (!convId) {
+      console.error("Usage: dy peek-conv <convId>");
+      process.exit(1);
+    }
+    const fs = await import("node:fs");
+    const LOG = "/tmp/dy-messages.jsonl";
+    const CURSOR = `/tmp/dy-listen-${convId}.cursor`;
+    if (!fs.existsSync(LOG)) { console.log(JSON.stringify({ hasNew: false, count: 0 })); return; }
+
+    const signature = loadSignature();
+    let cursor = 0;
+    try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+    const currentSize = fs.statSync(LOG).size;
+
+    if (currentSize <= cursor) {
+      console.log(JSON.stringify({ hasNew: false, count: 0 }));
+      return;
+    }
+
+    const fd = fs.openSync(LOG, "r");
+    const buf = Buffer.alloc(currentSize - cursor);
+    fs.readSync(fd, buf, 0, buf.length, cursor);
+    fs.closeSync(fd);
+    // DO NOT write cursor — leave messages for listen-conv to pick up
+
+    const count = buf.toString().trim().split("\n").filter(Boolean).filter(line => {
+      try {
+        const m = JSON.parse(line);
+        if (m.convId !== convId) return false;
+        if (m.text && m.text.endsWith(signature)) return false;
+        return true;
+      } catch { return false; }
+    }).length;
+
+    console.log(JSON.stringify({ hasNew: count > 0, count }));
   },
 
   async "drain-conv"(convId) {
@@ -1007,7 +1066,8 @@ Commands:
   shared-groups <uid>        Find group chats containing a user
   listen-conv <convId> [m]   Per-conversation listener (one conv only)
   listen-supervisor          Supervisor: emit active conversation signals
-  drain-conv <convId>        Instant check for new messages in a conv
+  peek-conv <convId>         Check for new messages without consuming them
+  drain-conv <convId>        Consume and return new messages in a conv
   sticker-cache <action>     Manage sticker interpretation cache
   search <query>             Search messages
   conv <convId>              Get conversation detail with last message
