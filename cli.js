@@ -42,7 +42,7 @@ function loadTriggerName() {
   return "bot";
 }
 
-async function resolveImage(md5, oid, cdnUrl, skey) {
+async function resolveImage(md5, oid, cdnUrl, skey, convId) {
   if (!md5) return null;
   const { existsSync, writeFileSync, mkdirSync } = await import("node:fs");
   const { execSync } = await import("node:child_process");
@@ -54,6 +54,7 @@ async function resolveImage(md5, oid, cdnUrl, skey) {
   if (oid) params.set("oid", oid);
   if (cdnUrl) params.set("url", cdnUrl);
   if (skey) params.set("skey", skey);
+  if (convId) params.set("convId", convId);
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -705,7 +706,7 @@ const commands = {
       // Download and convert images so agents can read them locally
       for (const m of enriched) {
         if (m.imageMd5) {
-          const localPath = await resolveImage(m.imageMd5, m.imageOid, m.imageUrl, m.imageSkey);
+          const localPath = await resolveImage(m.imageMd5, m.imageOid, m.imageUrl, m.imageSkey, convId);
           if (localPath) m.localImagePath = localPath;
         }
       }
@@ -950,7 +951,7 @@ const commands = {
     // Download and convert images so agents can read them locally
     for (const m of enriched) {
       if (m.imageMd5) {
-        const localPath = await resolveImage(m.imageMd5, m.imageOid, m.imageUrl, m.imageSkey);
+        const localPath = await resolveImage(m.imageMd5, m.imageOid, m.imageUrl, m.imageSkey, convId);
         if (localPath) m.localImagePath = localPath;
       }
     }
