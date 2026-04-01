@@ -42,7 +42,7 @@ function loadTriggerName() {
   return "bot";
 }
 
-async function resolveImage(md5) {
+async function resolveImage(md5, oid) {
   if (!md5) return null;
   const { existsSync, writeFileSync, mkdirSync } = await import("node:fs");
   const { execSync } = await import("node:child_process");
@@ -50,11 +50,14 @@ async function resolveImage(md5) {
   const jpegPath = `${IMAGE_CACHE}/${md5}.jpg`;
   if (existsSync(jpegPath)) return jpegPath;
 
+  const params = new URLSearchParams({ md5 });
+  if (oid) params.set("oid", oid);
+
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(`${BASE}/api/image?md5=${md5}`);
+      const res = await fetch(`${BASE}/api/image?${params}`);
       if (!res.ok) {
-        if (attempt < 2) { await new Promise(r => setTimeout(r, 1000)); continue; }
+        if (attempt < 2) { await new Promise(r => setTimeout(r, 1500)); continue; }
         return null;
       }
       const format = res.headers.get("x-image-format") || "";
@@ -72,7 +75,7 @@ async function resolveImage(md5) {
       writeFileSync(jpegPath, buffer);
       return jpegPath;
     } catch {
-      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
     }
   }
   return null;
@@ -663,6 +666,7 @@ const commands = {
                 entry.imageWidth = pc.cover_width || 0;
                 entry.imageHeight = pc.cover_height || 0;
                 entry.imageMd5 = url.md5 || "";
+                entry.imageOid = url.oid || "";
               }
               if (d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600)) {
                 entry.stickerUrl = pc.url?.url_list?.[0] || "";
@@ -693,7 +697,7 @@ const commands = {
       // Download and convert images so agents can read them locally
       for (const m of enriched) {
         if (m.imageMd5) {
-          const localPath = await resolveImage(m.imageMd5);
+          const localPath = await resolveImage(m.imageMd5, m.imageOid);
           if (localPath) m.localImagePath = localPath;
         }
       }
@@ -903,6 +907,7 @@ const commands = {
               entry.imageWidth = pc.cover_width || 0;
               entry.imageHeight = pc.cover_height || 0;
               entry.imageMd5 = url.md5 || "";
+              entry.imageOid = url.oid || "";
             }
             if (d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600)) {
               entry.stickerUrl = pc.url?.url_list?.[0] || "";
@@ -936,7 +941,7 @@ const commands = {
     // Download and convert images so agents can read them locally
     for (const m of enriched) {
       if (m.imageMd5) {
-        const localPath = await resolveImage(m.imageMd5);
+        const localPath = await resolveImage(m.imageMd5, m.imageOid);
         if (localPath) m.localImagePath = localPath;
       }
     }
