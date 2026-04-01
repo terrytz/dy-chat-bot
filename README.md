@@ -96,6 +96,7 @@ node cli.js <command> [args]
 | `messages <convId> [limit]` | Get messages from a conversation |
 | `send <convId> <message>` | Send a text message |
 | `poll [since_ts]` | Poll for new messages (JSON) |
+| `image <md5>` | Download and convert a chat image to JPEG |
 | `listen-loop [mode]` | Listener loop for AI integration |
 | `listen-conv <convId> [mode]` | Per-conversation listener (one conv only) |
 | `listen-supervisor` | Supervisor: emit active conversation signals |
@@ -112,7 +113,7 @@ The bot understands these message types from the poll/listen-loop output:
 |------|---------|-------------|--------|
 | 7 | 0, 700 | Text | `text` |
 | 5 | 500-599 | Sticker/GIF | `stickerUrl`, `stickerKeyword` |
-| 27 | 2702 | Image | `imageUrl`, `imageThumbUrl`, `imageWidth`, `imageHeight` |
+| 27 | 2702 | Image | `imageMd5`, `localImagePath`, `imageUrl`, `imageWidth`, `imageHeight` |
 | 8 | 800 | Video share | `videoTitle`, `videoAuthor`, `videoCoverUrl`, `videoItemId` |
 
 ## API Server
@@ -130,6 +131,7 @@ Required endpoints:
 | `/api/messages?convId=&limit=` | GET | Messages from a conversation |
 | `/api/new-messages?since=` | GET | Poll new messages |
 | `/api/conv?convId=` | GET | Conversation detail with members |
+| `/api/image?md5=&variant=large` | GET | Serve decrypted image from local cache |
 | `/api/send` | POST | Send message `{convId, text}` |
 
 ## Project Structure
