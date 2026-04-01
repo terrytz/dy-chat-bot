@@ -30,6 +30,7 @@ node cli.js <command> [args]
 | `listen-conv <convId> [mode]` | Per-conversation listener (one conv only) |
 | `listen-supervisor` | Supervisor: emit active conversation signals |
 | `peek-conv <convId>` | Check for new messages without consuming them |
+| `send-if-clear <convId> <msg>` | Atomic peek+send: only sends if no new messages |
 | `drain-conv <convId>` | Consume and return new messages in a conv |
 | `sticker-cache <action>` | Manage sticker interpretation cache |
 | `raw <path>` | Raw API call (e.g. `/api/ws-status`) |

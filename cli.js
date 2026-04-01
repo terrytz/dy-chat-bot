@@ -225,6 +225,57 @@ const commands = {
     console.log("Sent:", JSON.stringify(data, null, 2));
   },
 
+  async "send-if-clear"(convId, ...messageParts) {
+    // Atomic peek + send: checks for new messages first, only sends if clear.
+    // Returns { sent: true, ... } or { sent: false, hasNew: true, count: N }.
+    const message = messageParts.join(" ").replace(/\\([!'"?#&()])/g, "$1");
+    if (!convId || !message) {
+      console.error("Usage: dy send-if-clear <convId> <message>");
+      process.exit(1);
+    }
+    const fs = await import("node:fs");
+    const LOG = "/tmp/dy-messages.jsonl";
+    const CURSOR = `/tmp/dy-listen-${convId}.cursor`;
+    const signature = loadSignature();
+
+    // Peek logic (same as peek-conv, inline to avoid extra process)
+    let hasNew = false;
+    let count = 0;
+    if (fs.existsSync(LOG)) {
+      let cursor = 0;
+      try { cursor = parseInt(fs.readFileSync(CURSOR, "utf8").trim()) || 0; } catch {}
+      const currentSize = fs.statSync(LOG).size;
+      if (currentSize > cursor) {
+        const fd = fs.openSync(LOG, "r");
+        const buf = Buffer.alloc(currentSize - cursor);
+        fs.readSync(fd, buf, 0, buf.length, cursor);
+        fs.closeSync(fd);
+        count = buf.toString().trim().split("\n").filter(Boolean).filter(line => {
+          try {
+            const m = JSON.parse(line);
+            if (m.convId !== convId) return false;
+            if (m.text && m.text.endsWith(signature)) return false;
+            return true;
+          } catch { return false; }
+        }).length;
+        hasNew = count > 0;
+      }
+    }
+
+    if (hasNew) {
+      console.log(JSON.stringify({ sent: false, hasNew: true, count }));
+      return;
+    }
+
+    // Send
+    const { data } = await api("/api/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId, text: message }),
+    });
+    console.log(JSON.stringify({ sent: true, data }));
+  },
+
   async poll(since = "0") {
     const { data, ts } = await api(`/api/new-messages?since=${since}`);
     const signature = loadSignature();
@@ -1067,6 +1118,7 @@ Commands:
   listen-conv <convId> [m]   Per-conversation listener (one conv only)
   listen-supervisor          Supervisor: emit active conversation signals
   peek-conv <convId>         Check for new messages without consuming them
+  send-if-clear <id> <msg>   Atomic peek+send: sends only if no new messages
   drain-conv <convId>        Consume and return new messages in a conv
   sticker-cache <action>     Manage sticker interpretation cache
   search <query>             Search messages
