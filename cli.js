@@ -42,7 +42,7 @@ function loadTriggerName() {
   return "bot";
 }
 
-async function resolveImage(md5, oid) {
+async function resolveImage(md5, oid, cdnUrl, skey) {
   if (!md5) return null;
   const { existsSync, writeFileSync, mkdirSync } = await import("node:fs");
   const { execSync } = await import("node:child_process");
@@ -52,6 +52,8 @@ async function resolveImage(md5, oid) {
 
   const params = new URLSearchParams({ md5 });
   if (oid) params.set("oid", oid);
+  if (cdnUrl) params.set("url", cdnUrl);
+  if (skey) params.set("skey", skey);
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -347,6 +349,7 @@ const commands = {
         msg.imageWidth = pc.cover_width || 0;
         msg.imageHeight = pc.cover_height || 0;
         msg.imageMd5 = url.md5 || "";
+        msg.imageSkey = url.skey || "";
       }
       if (isVideoShare) {
         msg.videoTitle = pc.content_title || "";
@@ -571,6 +574,8 @@ const commands = {
             entry.imageThumbUrl = url.thumb_url_list?.[0] || "";
             entry.imageWidth = pc.cover_width || 0;
             entry.imageHeight = pc.cover_height || 0;
+            entry.imageMd5 = url.md5 || "";
+            entry.imageSkey = url.skey || "";
           }
           if (isVideoShare) {
             entry.videoTitle = pc.content_title || "";
@@ -667,6 +672,7 @@ const commands = {
                 entry.imageHeight = pc.cover_height || 0;
                 entry.imageMd5 = url.md5 || "";
                 entry.imageOid = url.oid || "";
+                entry.imageSkey = url.skey || "";
               }
               if (d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600)) {
                 entry.stickerUrl = pc.url?.url_list?.[0] || "";
@@ -687,6 +693,8 @@ const commands = {
         const apiData = pollByTs.get(m.createdAt);
         const out = apiData ? { ...m, ...apiData } : { ...m };
         if (!out.imageMd5 && m.imageMd5) out.imageMd5 = m.imageMd5;
+        if (!out.imageSkey && m.imageSkey) out.imageSkey = m.imageSkey;
+        if (!out.imageUrl && m.imageUrl) out.imageUrl = m.imageUrl;
         if (out.stickerUrl || out.stickerKeyword) {
           const cached = stickerLookup(out.stickerUrl, out.stickerKeyword);
           if (cached) out.stickerInterpretation = cached;
@@ -697,7 +705,7 @@ const commands = {
       // Download and convert images so agents can read them locally
       for (const m of enriched) {
         if (m.imageMd5) {
-          const localPath = await resolveImage(m.imageMd5, m.imageOid);
+          const localPath = await resolveImage(m.imageMd5, m.imageOid, m.imageUrl, m.imageSkey);
           if (localPath) m.localImagePath = localPath;
         }
       }
@@ -810,7 +818,7 @@ const commands = {
           const isVideoShare = pc.aweType === 800 || m.type === 8;
           const entry = { sender: m.sender, isSelfSend: m.isSelfSend, text: pc.text || "", createdAt: m.createdAt };
           if (isSticker) { entry.stickerUrl = pc.url?.url_list?.[0] || ""; entry.stickerKeyword = pc.display_name || pc.keyword || ""; }
-          if (isImage) { const url = pc.resource_url || {}; entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || ""; entry.imageThumbUrl = url.thumb_url_list?.[0] || ""; entry.imageMd5 = url.md5 || ""; }
+          if (isImage) { const url = pc.resource_url || {}; entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || ""; entry.imageThumbUrl = url.thumb_url_list?.[0] || ""; entry.imageMd5 = url.md5 || ""; entry.imageSkey = url.skey || ""; }
           if (isVideoShare) { entry.videoTitle = pc.content_title || ""; entry.videoAuthor = pc.content_name || ""; entry.videoCoverUrl = pc.cover_url?.url_list?.[0] || ""; }
           return entry;
         });
@@ -908,6 +916,7 @@ const commands = {
               entry.imageHeight = pc.cover_height || 0;
               entry.imageMd5 = url.md5 || "";
               entry.imageOid = url.oid || "";
+              entry.imageSkey = url.skey || "";
             }
             if (d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600)) {
               entry.stickerUrl = pc.url?.url_list?.[0] || "";
@@ -928,9 +937,9 @@ const commands = {
     const enriched = allMsgs.map(m => {
       const apiData = pollByTs.get(m.createdAt);
       const out = apiData ? { ...m, ...apiData } : { ...m };
-      // Also pick up imageMd5 from JSONL if poll didn't have it
       if (!out.imageMd5 && m.imageMd5) out.imageMd5 = m.imageMd5;
-      // Enrich stickers with cache
+      if (!out.imageSkey && m.imageSkey) out.imageSkey = m.imageSkey;
+      if (!out.imageUrl && m.imageUrl) out.imageUrl = m.imageUrl;
       if (out.stickerUrl || out.stickerKeyword) {
         const cached = stickerLookup(out.stickerUrl, out.stickerKeyword);
         if (cached) out.stickerInterpretation = cached;
@@ -941,7 +950,7 @@ const commands = {
     // Download and convert images so agents can read them locally
     for (const m of enriched) {
       if (m.imageMd5) {
-        const localPath = await resolveImage(m.imageMd5, m.imageOid);
+        const localPath = await resolveImage(m.imageMd5, m.imageOid, m.imageUrl, m.imageSkey);
         if (localPath) m.localImagePath = localPath;
       }
     }
