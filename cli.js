@@ -8,6 +8,7 @@ import { lookup as stickerLookup, store as stickerStore, list as stickerList, st
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const USER_DIR = join(__dirname, "user");
 const BASE = "http://127.0.0.1:3456";
+const IMAGE_CACHE = "/tmp/dy-images";
 
 function loadConfig() {
   try {
@@ -39,6 +40,42 @@ function loadTriggerName() {
     if (triggerMatch) return triggerMatch[1].toLowerCase();
   } catch {}
   return "bot";
+}
+
+async function resolveImage(md5) {
+  if (!md5) return null;
+  const { existsSync, writeFileSync, mkdirSync } = await import("node:fs");
+  const { execSync } = await import("node:child_process");
+  if (!existsSync(IMAGE_CACHE)) mkdirSync(IMAGE_CACHE, { recursive: true });
+  const jpegPath = `${IMAGE_CACHE}/${md5}.jpg`;
+  if (existsSync(jpegPath)) return jpegPath;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${BASE}/api/image?md5=${md5}`);
+      if (!res.ok) {
+        if (attempt < 2) { await new Promise(r => setTimeout(r, 1000)); continue; }
+        return null;
+      }
+      const format = res.headers.get("x-image-format") || "";
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (format === "heic" || format === "webp") {
+        const tmpPath = `${IMAGE_CACHE}/${md5}.${format}`;
+        writeFileSync(tmpPath, buffer);
+        try {
+          execSync(`sips -s format jpeg "${tmpPath}" --out "${jpegPath}" 2>/dev/null`);
+          return jpegPath;
+        } catch {
+          return tmpPath;
+        }
+      }
+      writeFileSync(jpegPath, buffer);
+      return jpegPath;
+    } catch {
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  return null;
 }
 
 async function api(path, options = {}) {
@@ -306,6 +343,7 @@ const commands = {
         msg.imageThumbUrl = url.thumb_url_list?.[0] || "";
         msg.imageWidth = pc.cover_width || 0;
         msg.imageHeight = pc.cover_height || 0;
+        msg.imageMd5 = url.md5 || "";
       }
       if (isVideoShare) {
         msg.videoTitle = pc.content_title || "";
@@ -316,6 +354,20 @@ const commands = {
       return msg;
     });
     console.log(JSON.stringify({ messages, ts }, null, 2));
+  },
+
+  async image(md5) {
+    if (!md5) {
+      console.error("Usage: dy image <md5>");
+      process.exit(1);
+    }
+    const localPath = await resolveImage(md5);
+    if (localPath) {
+      console.log(localPath);
+    } else {
+      console.error("Image not found in local cache");
+      process.exit(1);
+    }
   },
 
   async watch() {
@@ -610,6 +662,7 @@ const commands = {
                 entry.imageThumbUrl = url.thumb_url_list?.[0] || "";
                 entry.imageWidth = pc.cover_width || 0;
                 entry.imageHeight = pc.cover_height || 0;
+                entry.imageMd5 = url.md5 || "";
               }
               if (d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600)) {
                 entry.stickerUrl = pc.url?.url_list?.[0] || "";
@@ -629,12 +682,21 @@ const commands = {
       const enriched = convMsgs.map(m => {
         const apiData = pollByTs.get(m.createdAt);
         const out = apiData ? { ...m, ...apiData } : { ...m };
+        if (!out.imageMd5 && m.imageMd5) out.imageMd5 = m.imageMd5;
         if (out.stickerUrl || out.stickerKeyword) {
           const cached = stickerLookup(out.stickerUrl, out.stickerKeyword);
           if (cached) out.stickerInterpretation = cached;
         }
         return out;
       });
+
+      // Download and convert images so agents can read them locally
+      for (const m of enriched) {
+        if (m.imageMd5) {
+          const localPath = await resolveImage(m.imageMd5);
+          if (localPath) m.localImagePath = localPath;
+        }
+      }
 
       console.log(JSON.stringify({
         type: "messages",
@@ -744,7 +806,7 @@ const commands = {
           const isVideoShare = pc.aweType === 800 || m.type === 8;
           const entry = { sender: m.sender, isSelfSend: m.isSelfSend, text: pc.text || "", createdAt: m.createdAt };
           if (isSticker) { entry.stickerUrl = pc.url?.url_list?.[0] || ""; entry.stickerKeyword = pc.display_name || pc.keyword || ""; }
-          if (isImage) { const url = pc.resource_url || {}; entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || ""; entry.imageThumbUrl = url.thumb_url_list?.[0] || ""; }
+          if (isImage) { const url = pc.resource_url || {}; entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || ""; entry.imageThumbUrl = url.thumb_url_list?.[0] || ""; entry.imageMd5 = url.md5 || ""; }
           if (isVideoShare) { entry.videoTitle = pc.content_title || ""; entry.videoAuthor = pc.content_name || ""; entry.videoCoverUrl = pc.cover_url?.url_list?.[0] || ""; }
           return entry;
         });
@@ -840,6 +902,7 @@ const commands = {
               entry.imageThumbUrl = url.thumb_url_list?.[0] || "";
               entry.imageWidth = pc.cover_width || 0;
               entry.imageHeight = pc.cover_height || 0;
+              entry.imageMd5 = url.md5 || "";
             }
             if (d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600)) {
               entry.stickerUrl = pc.url?.url_list?.[0] || "";
@@ -860,6 +923,8 @@ const commands = {
     const enriched = allMsgs.map(m => {
       const apiData = pollByTs.get(m.createdAt);
       const out = apiData ? { ...m, ...apiData } : { ...m };
+      // Also pick up imageMd5 from JSONL if poll didn't have it
+      if (!out.imageMd5 && m.imageMd5) out.imageMd5 = m.imageMd5;
       // Enrich stickers with cache
       if (out.stickerUrl || out.stickerKeyword) {
         const cached = stickerLookup(out.stickerUrl, out.stickerKeyword);
@@ -867,6 +932,14 @@ const commands = {
       }
       return out;
     });
+
+    // Download and convert images so agents can read them locally
+    for (const m of enriched) {
+      if (m.imageMd5) {
+        const localPath = await resolveImage(m.imageMd5);
+        if (localPath) m.localImagePath = localPath;
+      }
+    }
 
     console.log(JSON.stringify({
       type: "messages",

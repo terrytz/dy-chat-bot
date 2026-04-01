@@ -25,6 +25,7 @@ node cli.js <command> [args]
 | `messages <convId> [limit]` | Get messages from a conversation |
 | `send <convId> <message>` | Send a text message |
 | `poll [since_ts]` | Poll for new incoming messages since timestamp |
+| `image <md5>` | Download and convert a chat image to JPEG (returns local path) |
 | `search <query>` | Search messages |
 | `conv <convId>` | Get conversation detail |
 | `listen-conv <convId> [mode]` | Per-conversation listener (one conv only) |
@@ -47,10 +48,14 @@ Incoming messages from `poll` have this structure:
 - `createdAt` - timestamp in milliseconds
 
 ### Image messages (type 27, aweType 2702)
-- `imageUrl` - best available image URL (origin > large > medium)
-- `imageThumbUrl` - thumbnail URL
+- `imageMd5` - image cache key (use with `image` command or `/api/image?md5=`)
+- `localImagePath` - local JPEG path (auto-resolved by `listen-conv`/`listen-loop`; agents should `Read` this file to see the image)
+- `imageUrl` - CDN URL (encrypted — do NOT fetch directly; use `imageMd5` instead)
+- `imageThumbUrl` - thumbnail CDN URL (also encrypted)
 - `imageWidth`, `imageHeight` - dimensions
 - Raw data in `parsedContent.resource_url` has `thumb/medium/large/origin_url_list`, `data_size`, `oid`, `md5`
+
+**Image pipeline**: Douyin CDN URLs return encrypted data. The Electron app decrypts and caches images locally. The `/api/image?md5=` endpoint serves these cached files. The CLI `image` command fetches and converts HEIC→JPEG to `/tmp/dy-images/{md5}.jpg`. `listen-conv` auto-resolves images so agents get a `localImagePath` they can `Read` directly.
 
 ### Video share messages (type 8, aweType 800)
 - `videoTitle` - shared video title
