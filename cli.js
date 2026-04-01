@@ -591,13 +591,49 @@ const commands = {
         if (uid && nickMap[uid]) nicknames[uid] = nickMap[uid];
       }
 
-      // Enrich sticker messages with cached interpretations
+      // Enrich batch messages with media URLs from /api/new-messages
+      const hasMedia = convMsgs.some(m => m.type === 27 || m.aweType === 2702 || m.type === 5 || m.type === 8 || m.aweType === 800);
+      let pollByTs = new Map();
+      if (hasMedia) {
+        try {
+          const oldest = Math.min(...convMsgs.map(m => m.createdAt || m.ts)) - 1000;
+          const pollRes = await fetch(`${BASE}/api/new-messages?since=${oldest}`);
+          const pollData = await pollRes.json();
+          for (const pm of (pollData.data || [])) {
+            const d = pm.data;
+            const pc = d?.parsedContent || {};
+            if (d?.createdAt) {
+              const entry = {};
+              if (d.type === 27 || pc.aweType === 2702) {
+                const url = pc.resource_url || {};
+                entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || "";
+                entry.imageThumbUrl = url.thumb_url_list?.[0] || "";
+                entry.imageWidth = pc.cover_width || 0;
+                entry.imageHeight = pc.cover_height || 0;
+              }
+              if (d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600)) {
+                entry.stickerUrl = pc.url?.url_list?.[0] || "";
+                entry.stickerKeyword = pc.display_name || pc.keyword || "";
+              }
+              if (d.type === 8 || pc.aweType === 800) {
+                entry.videoTitle = pc.content_title || "";
+                entry.videoAuthor = pc.content_name || "";
+                entry.videoCoverUrl = pc.cover_url?.url_list?.[0] || "";
+              }
+              if (Object.keys(entry).length > 0) pollByTs.set(d.createdAt, entry);
+            }
+          }
+        } catch {}
+      }
+
       const enriched = convMsgs.map(m => {
-        if (m.stickerUrl || m.stickerKeyword) {
-          const cached = stickerLookup(m.stickerUrl, m.stickerKeyword);
-          if (cached) return { ...m, stickerInterpretation: cached };
+        const apiData = pollByTs.get(m.createdAt);
+        const out = apiData ? { ...m, ...apiData } : { ...m };
+        if (out.stickerUrl || out.stickerKeyword) {
+          const cached = stickerLookup(out.stickerUrl, out.stickerKeyword);
+          if (cached) out.stickerInterpretation = cached;
         }
-        return m;
+        return out;
       });
 
       console.log(JSON.stringify({
@@ -782,13 +818,54 @@ const commands = {
       if (uid && nickMap[uid]) nicknames[uid] = nickMap[uid];
     }
 
-    // Enrich stickers with cache
+    // Enrich batch messages with media URLs.
+    // The JSONL log only has basic fields (no URLs). We fetch full data from
+    // /api/new-messages (which has parsedContent with resource_url, sticker urls, etc.)
+    // and match by createdAt timestamp to merge media fields into the batch.
+    const hasMedia = allMsgs.some(m => m.type === 27 || m.aweType === 2702 || m.type === 5 || m.type === 8 || m.aweType === 800);
+    let pollByTs = new Map();
+    if (hasMedia) {
+      try {
+        const oldest = Math.min(...allMsgs.map(m => m.createdAt || m.ts)) - 1000;
+        const pollRes = await fetch(`${BASE}/api/new-messages?since=${oldest}`);
+        const pollData = await pollRes.json();
+        for (const m of (pollData.data || [])) {
+          const d = m.data;
+          const pc = d?.parsedContent || {};
+          if (d?.createdAt) {
+            const entry = {};
+            if (d.type === 27 || pc.aweType === 2702) {
+              const url = pc.resource_url || {};
+              entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || url.medium_url_list?.[0] || "";
+              entry.imageThumbUrl = url.thumb_url_list?.[0] || "";
+              entry.imageWidth = pc.cover_width || 0;
+              entry.imageHeight = pc.cover_height || 0;
+            }
+            if (d.type === 5 || (pc.aweType >= 500 && pc.aweType < 600)) {
+              entry.stickerUrl = pc.url?.url_list?.[0] || "";
+              entry.stickerKeyword = pc.display_name || pc.keyword || "";
+            }
+            if (d.type === 8 || pc.aweType === 800) {
+              entry.videoTitle = pc.content_title || "";
+              entry.videoAuthor = pc.content_name || "";
+              entry.videoCoverUrl = pc.cover_url?.url_list?.[0] || "";
+              entry.videoItemId = pc.itemId || "";
+            }
+            if (Object.keys(entry).length > 0) pollByTs.set(d.createdAt, entry);
+          }
+        }
+      } catch {}
+    }
+
     const enriched = allMsgs.map(m => {
-      if (m.stickerUrl || m.stickerKeyword) {
-        const cached = stickerLookup(m.stickerUrl, m.stickerKeyword);
-        if (cached) return { ...m, stickerInterpretation: cached };
+      const apiData = pollByTs.get(m.createdAt);
+      const out = apiData ? { ...m, ...apiData } : { ...m };
+      // Enrich stickers with cache
+      if (out.stickerUrl || out.stickerKeyword) {
+        const cached = stickerLookup(out.stickerUrl, out.stickerKeyword);
+        if (cached) out.stickerInterpretation = cached;
       }
-      return m;
+      return out;
     });
 
     console.log(JSON.stringify({
