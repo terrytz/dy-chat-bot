@@ -78,11 +78,13 @@ Templates at project root: `config.example.json`, `PERSONA.example.md`
 
 In `user/config.json`:
 - `defaultModel` — model for all agents (default: `"sonnet"`). Values: `"sonnet"`, `"opus"`, `"haiku"`.
+- `signature` — appended to every sent message by code (default: `"[Bot]"`). **Do NOT instruct the AI to append the signature** — `send` and `send-if-clear` handle it automatically.
 - Per-chat override — each `allowedChats` entry can have a `"model"` field.
 
 ```json
 {
   "defaultModel": "sonnet",
+  "signature": "-- Chloe",
   "allowedChats": {
     "0:2:abc123": { "name": "My Group", "model": "opus" }
   }

@@ -26,9 +26,8 @@ function isAllowedChat(convId) {
 
 function loadSignature() {
   try {
-    const persona = readFileSync(join(USER_DIR, "PERSONA.md"), "utf8");
-    const sigMatch = persona.match(/Signature[*:\s]*`([^`]+)`/i);
-    if (sigMatch) return sigMatch[1];
+    const config = JSON.parse(readFileSync(join(USER_DIR, "config.json"), "utf8"));
+    if (config.signature) return config.signature;
   } catch {}
   return "[Bot]";
 }
@@ -255,15 +254,17 @@ const commands = {
   },
 
   async send(convId, ...messageParts) {
-    const message = messageParts.join(" ").replace(/\\([!'"?#&()])/g, "$1");
+    const message = messageParts.join(" ").replace(/\\n/g, "\n").replace(/\\([!'"?#&()])/g, "$1");
     if (!convId || !message) {
       console.error("Usage: dy send <convId> <message>");
       process.exit(1);
     }
+    const signature = loadSignature();
+    const text = message.endsWith(signature) ? message : `${message}\n${signature}`;
     const { data } = await api("/api/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ convId, text: message }),
+      body: JSON.stringify({ convId, text }),
     });
     console.log("Sent:", JSON.stringify(data, null, 2));
   },
@@ -271,7 +272,7 @@ const commands = {
   async "send-if-clear"(convId, ...messageParts) {
     // Atomic peek + send: checks for new messages first, only sends if clear.
     // Returns { sent: true, ... } or { sent: false, hasNew: true, count: N }.
-    const message = messageParts.join(" ").replace(/\\([!'"?#&()])/g, "$1");
+    const message = messageParts.join(" ").replace(/\\n/g, "\n").replace(/\\([!'"?#&()])/g, "$1");
     if (!convId || !message) {
       console.error("Usage: dy send-if-clear <convId> <message>");
       process.exit(1);
@@ -310,11 +311,12 @@ const commands = {
       return;
     }
 
-    // Send
+    // Send (append signature if not already present)
+    const text = message.endsWith(signature) ? message : `${message}\n${signature}`;
     const { data } = await api("/api/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ convId, text: message }),
+      body: JSON.stringify({ convId, text }),
     });
     console.log(JSON.stringify({ sent: true, data }));
   },

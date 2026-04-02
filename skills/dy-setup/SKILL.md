@@ -123,7 +123,9 @@ Read the current `user/PERSONA.md`. Ask each question **one at a time** using As
 > What word should trigger the bot? (default: <bot name lowercase>)
 
 **6c.** AskUserQuestion:
-> What signature should be appended to sent messages? (default: [<BotName>])
+> What signature should be appended to sent messages? (default: -- <BotName>)
+
+Save the answer to `user/config.json` as `"signature": "<answer>"`. This is appended by code, not by the AI.
 
 **6d.** AskUserQuestion:
 > What's your name? (for the Owner field)
@@ -134,7 +136,7 @@ Read the current `user/PERSONA.md`. Ask each question **one at a time** using As
 **6f.** AskUserQuestion:
 > What language should the bot use? (Chinese / English / bilingual / other)
 
-Update `user/PERSONA.md` using the Edit tool with their answers. Only change what they specified.
+Update `user/PERSONA.md` using the Edit tool with their answers (name, trigger, owner, personality, language). Do NOT put the signature in PERSONA.md — it's in `config.json` and appended by code automatically.
 
 ### Step 7: Configure allowed chats
 
