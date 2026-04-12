@@ -89,28 +89,19 @@ Stop here — the app is required.
 
 ### Step 5: Check API server
 
-Launch the app and verify the API:
-
-```bash
-open -a "抖音聊天"
-```
-
-Wait 5 seconds, then run `node cli.js health` from the project directory.
+Run `node cli.js health` from the project directory.
 
 **If health check passes**: continue.
 
-**If it fails**: explain:
-> The 抖音聊天 app needs a modified `app.asar` that runs an HTTP API server on `127.0.0.1:3456`.
-> This modification is not included — you need to inject an HTTP server into the Electron app's renderer process.
->
-> Required endpoints:
-> - `GET /health`, `GET /api/user`, `GET /api/conversations`
-> - `GET /api/contacts`, `GET /api/messages?convId=&limit=20`
-> - `GET /api/new-messages?since=0`, `POST /api/send {convId, text}`
->
-> Once installed, restart the app and run `/dy-setup` again.
+**If it fails**: run the injection script to patch the app:
 
-Stop here.
+```bash
+./inject.sh
+```
+
+This backs up the original `app.asar`, patches it with the API server, re-signs the app, and launches it. Wait for the app to fully load, then retry `node cli.js health`.
+
+If the health check still fails after injection, ask the user to check that the 抖音聊天 app is open and logged in, then retry.
 
 ### Step 6: Configure persona
 

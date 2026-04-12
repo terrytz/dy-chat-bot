@@ -5,10 +5,15 @@ CLI tool for reading and sending messages in 抖音聊天 (Douyin Chat) desktop 
 ## Prerequisites
 
 The 抖音聊天 app must be running with the injected API server (port 3456).
-A modified `app.asar` has been installed that runs an HTTP API server on `127.0.0.1:3456` inside the Electron renderer process.
+A modified `app.asar` has been installed that runs an HTTP API server on `127.0.0.1:3456` inside the Electron preload process.
 
+- Inject: `./inject.sh` (patches `app.asar`, backs up original)
+- Restore: `./inject.sh --restore`
+- Check: `./inject.sh --status`
 - Launch: `open -a "抖音聊天"`
 - Verify: `node cli.js health`
+
+After the app updates, re-run `./inject.sh` to re-patch.
 
 ## CLI Usage
 

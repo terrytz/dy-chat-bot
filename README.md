@@ -48,7 +48,7 @@ This project provides:
 - macOS with **抖音聊天** desktop app installed
 - **Node.js** 18+
 - An AI coding agent (Claude Code, Cursor, Windsurf, Trae, etc.)
-- A modified `app.asar` with the API server (see [API Server](#api-server))
+- The API server injection (run `./inject.sh` — see [API Server](#api-server))
 
 ### Install Skills
 
@@ -118,9 +118,19 @@ The bot understands these message types from the poll/listen-loop output:
 
 ## API Server
 
-The 抖音聊天 app needs a modified `app.asar` that runs an HTTP API server on `127.0.0.1:3456`. This is not included — you need to create or obtain it separately.
+The 抖音聊天 app needs a modified `app.asar` that runs an HTTP API server on `127.0.0.1:3456`.
 
-Required endpoints:
+### Injecting the API Server
+
+```bash
+./inject.sh            # Patch the app (backs up original first)
+./inject.sh --status   # Check if patched
+./inject.sh --restore  # Restore original app.asar
+```
+
+After a 抖音聊天 app update, the `app.asar` is replaced with the stock version. Re-run `./inject.sh` to re-patch.
+
+### Required endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -141,6 +151,9 @@ dy-chat-bot/
 ├── cli.js                # Main CLI
 ├── sticker-cache.js      # Sticker interpretation cache module
 ├── install.sh            # Cross-agent skill installer
+├── inject.sh             # app.asar patcher (injects API server)
+├── patch-asar.cjs        # Binary asar patcher (used by inject.sh)
+├── api-server.js         # HTTP API server (injected into Electron app)
 ├── package.json
 ├── config.example.json   # Template config (copy to user/)
 ├── PERSONA.example.md    # Template persona (copy to user/)
