@@ -25,10 +25,52 @@ const IMAGE_DIR = path.join(
 const MAX_BUFFER = 2000;
 let msgBuffer = [];
 
+const JSONL_LOG = "/tmp/dy-messages.jsonl";
+
 function bufferMessage(msg) {
   msgBuffer.push({ data: msg, receivedAt: Date.now() });
   if (msgBuffer.length > MAX_BUFFER) {
     msgBuffer = msgBuffer.slice(-MAX_BUFFER);
+  }
+
+  // Write to JSONL log file for listen-conv / listen-loop consumers
+  try {
+    const pc = msg.parsedContent || (typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content) || {};
+    const isSticker = msg.type === 5 || (pc.aweType >= 500 && pc.aweType < 600);
+    const isImage = pc.aweType === 2702 || msg.type === 27;
+    const isVideoShare = pc.aweType === 800 || msg.type === 8;
+    const entry = {
+      convId: msg.conversationId || msg.convId || "",
+      sender: msg.sender || "",
+      isSelfSend: !!msg.isSelfSend,
+      text: pc.text || "",
+      type: msg.type,
+      aweType: pc.aweType,
+      createdAt: msg.createdAt || Date.now(),
+      isBotMessage: false,
+    };
+    if (isSticker) {
+      entry.stickerUrl = pc.url?.url_list?.[0] || "";
+      entry.stickerKeyword = pc.display_name || pc.keyword || "";
+    }
+    if (isImage) {
+      const url = pc.resource_url || {};
+      entry.imageUrl = url.origin_url_list?.[0] || url.large_url_list?.[0] || "";
+      entry.imageThumbUrl = url.thumb_url_list?.[0] || "";
+      entry.imageWidth = pc.cover_width || 0;
+      entry.imageHeight = pc.cover_height || 0;
+      entry.imageMd5 = url.md5 || "";
+      entry.imageSkey = url.skey || "";
+    }
+    if (isVideoShare) {
+      entry.videoTitle = pc.content_title || "";
+      entry.videoAuthor = pc.content_name || "";
+      entry.videoCoverUrl = pc.cover_url?.url_list?.[0] || "";
+      entry.videoItemId = pc.itemId || "";
+    }
+    fs.appendFileSync(JSONL_LOG, JSON.stringify(entry) + "\n");
+  } catch {
+    // ignore write errors
   }
 }
 
